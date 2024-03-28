@@ -124,7 +124,7 @@ class Logger:
         value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
         self._writer.add_video(name, value, step, 16)
 
-
+# This function simulates interaction between the agent and environments for both training and evaluation.
 def simulate(
     agent,
     envs,
@@ -141,18 +141,21 @@ def simulate(
     if state is None:
         step, episode = 0, 0
         done = np.ones(len(envs), bool)
-        length = np.zeros(len(envs), np.int32)
-        obs = [None] * len(envs)
+        length = np.zeros(len(envs), np.int32) # Tracks whether each environment needs to be reset.
+        obs = [None] * len(envs)# Holds the latest observation from each environment.
         agent_state = None
         reward = [0] * len(envs)
     else:
+        # Unpack the provided state if resuming.
         step, episode, done, length, obs, agent_state, reward = state
+
+    # Main simulation loop.
     while (steps and step < steps) or (episodes and episode < episodes):
-        # reset envs if necessary
+        # Reset environments that are done.
         if done.any():
-            indices = [index for index, d in enumerate(done) if d]
-            results = [envs[i].reset() for i in indices]
-            results = [r() for r in results]
+            indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.
+            results = [envs[i].reset() for i in indices] # Reset and get initial observations.
+            results = [r() for r in results] # Assume these are async calls, so we get the results.
             for index, result in zip(indices, results):
                 t = result.copy()
                 t = {k: convert(v) for k, v in t.items()}
@@ -164,9 +167,13 @@ def simulate(
                 # replace obs with done by initial state
                 obs[index] = result
         # step agents
+        # Prepare observations for the agent.
         obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
-        action, agent_state = agent(obs, done, agent_state)
+        # Call the agent to get actions to perform in each environment.
+        # This is where the world model within the agent is trained, as part of generating the action.
+        action, agent_state = agent(obs, done, agent_state) # WORLD MODEL TRAINING, TODO: THIS GIVES NUMPY ARRAY
         if isinstance(action, dict):
+            # Convert actions to the appropriate format for each environment
             action = [
                 {k: np.array(action[k][i].detach().cpu()) for k in action}
                 for i in range(len(envs))
@@ -174,8 +181,9 @@ def simulate(
         else:
             action = np.array(action)
         assert len(action) == len(envs)
-        # step envs
-        results = [e.step(a) for e, a in zip(envs, action)]
+        # Perform actions in each environment and observe the results.
+        results = [e.step(a) for e, a in zip(envs, action)] # ENV Interraction
+         # Unpack results to update simulation state.
         results = [r() for r in results]
         obs, reward, done = zip(*[p[:3] for p in results])
         obs = list(obs)
