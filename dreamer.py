@@ -56,6 +56,7 @@ class Dreamer(nn.Module):
         )[config.expl_behavior]().to(self._config.device)
 
     def __call__(self, obs, reset, state=None, training=True):
+        print('call function called')
         step = self._step
         if training:
             steps = (
@@ -115,6 +116,9 @@ class Dreamer(nn.Module):
         return policy_output, state
 
     def _train(self, data):
+        '''
+            train world model -> dynamics learning
+        '''
         metrics = {}
         post, context, mets = self._wm._train(data)
         metrics.update(mets)
@@ -122,6 +126,9 @@ class Dreamer(nn.Module):
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
+        """
+            train actor critic
+        """
         metrics.update(self._task_behavior._train(start, reward)[-1])
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
@@ -202,55 +209,73 @@ def make_env(config, mode, id):
         env = wrappers.RewardObs(env)
     return env
 
-
+# Main function to configure and execute the training of the Dreamer model.
 def main(config):
+    # Set a fixed random seed for reproducibility across runs.
     tools.set_seed_everywhere(config.seed)
+    # Enable deterministic operations for reproducibility if specified in config.
     if config.deterministic_run:
         tools.enable_deterministic_run()
+
+    # Prepare logging directories for training and evaluation data.
     logdir = pathlib.Path(config.logdir).expanduser()
     config.traindir = config.traindir or logdir / "train_eps"
     config.evaldir = config.evaldir or logdir / "eval_eps"
+    # Adjust various config settings based on the action repeat parameter for consistent timing.
     config.steps //= config.action_repeat
     config.eval_every //= config.action_repeat
     config.log_every //= config.action_repeat
     config.time_limit //= config.action_repeat
 
+    # Initialize logging directory and announce its location.
     print("Logdir", logdir)
     logdir.mkdir(parents=True, exist_ok=True)
     config.traindir.mkdir(parents=True, exist_ok=True)
     config.evaldir.mkdir(parents=True, exist_ok=True)
+    # Count the steps already present in the training directory to resume training appropriately.
     step = count_steps(config.traindir)
     # step in logger is environmental step
     logger = tools.Logger(logdir, config.action_repeat * step)
-
+    # Load episodes for training and evaluation, potentially from specified offline directories.
     print("Create envs.")
+    # Determine the directory for loading training episodes, favoring an offline directory if specified.
     if config.offline_traindir:
         directory = config.offline_traindir.format(**vars(config))
     else:
         directory = config.traindir
+    # Load training episodes from the specified directory, up to the configured dataset size limit.
     train_eps = tools.load_episodes(directory, limit=config.dataset_size)
     if config.offline_evaldir:
         directory = config.offline_evaldir.format(**vars(config))
     else:
         directory = config.evaldir
+    # Repeat the process for evaluation episodes, with a limit of 1 to possibly denote a single batch or episode.
     eval_eps = tools.load_episodes(directory, limit=1)
+    # Define a function for creating environments, parameterized by mode (train or eval) and ID.
     make = lambda mode, id: make_env(config, mode, id)
+    # Create training and evaluation environments for each configured environment instance.
     train_envs = [make("train", i) for i in range(config.envs)]
     eval_envs = [make("eval", i) for i in range(config.envs)]
+    # If configured for parallel execution, wrap environments for parallel processing; otherwise, use a dummy wrapper.
     if config.parallel:
         train_envs = [Parallel(env, "process") for env in train_envs]
         eval_envs = [Parallel(env, "process") for env in eval_envs]
     else:
         train_envs = [Damy(env) for env in train_envs]
         eval_envs = [Damy(env) for env in eval_envs]
+    # Determine the action space from the first training environment and log it.
     acts = train_envs[0].action_space
     print("Action Space", acts)
+    # Set the number of actions in the configuration based on the determined action space.
     config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
 
+    # Initialize the state for potentially pre-filling the replay buffer.
     state = None
+    # If not using an offline training directory, calculate how much pre-filling is needed based on existing data.
     if not config.offline_traindir:
         prefill = max(0, config.prefill - count_steps(config.traindir))
         print(f"Prefill dataset ({prefill} steps).")
+        # Determine the type of random actor based on the action space being discrete or continuous.
         if hasattr(acts, "discrete"):
             random_actor = tools.OneHotDist(
                 torch.zeros(config.num_actions).repeat(config.envs, 1)
@@ -263,12 +288,13 @@ def main(config):
                 ),
                 1,
             )
-
+        # Define a random agent that samples actions uniformly and calculates their log probability.
         def random_agent(o, d, s):
             action = random_actor.sample()
             logprob = random_actor.log_prob(action)
             return {"action": action, "logprob": logprob}, None
-
+        
+        # Simulate the random agent in the training environments to pre-fill the dataset, logging progress.
         state = tools.simulate(
             random_agent,
             train_envs,
@@ -278,12 +304,16 @@ def main(config):
             limit=config.dataset_size,
             steps=prefill,
         )
+        # Update the logger with the number of steps simulated during pre-filling.
         logger.step += prefill * config.action_repeat
         print(f"Logger: ({logger.step} steps).")
-
+    
+    # Start of the agent simulation process.
     print("Simulate agent.")
+    # Create training and evaluation datasets from loaded episodes.
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
+    # Initialize the Dreamer agent with the specified configurations and datasets.
     agent = Dreamer(
         train_envs[0].observation_space,
         train_envs[0].action_space,
@@ -291,19 +321,24 @@ def main(config):
         logger,
         train_dataset,
     ).to(config.device)
+    # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
         checkpoint = torch.load(logdir / "latest.pt")
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
+        # Ensure the agent does not pretrain again if it has already completed pretraining.
         agent._should_pretrain._once = False
 
     # make sure eval will be executed once after config.steps
     while agent._step < config.steps + config.eval_every:
         logger.write()
+        # If the configuration specifies evaluation episodes, proceed with evaluation.
         if config.eval_episode_num > 0:
             print("Start evaluation.")
+            # Define the evaluation policy, making sure the agent is in evaluation mode (no training).
             eval_policy = functools.partial(agent, training=False)
+            # Simulate the agent in evaluation mode across the evaluation environments.
             tools.simulate(
                 eval_policy,
                 eval_envs,
@@ -313,10 +348,12 @@ def main(config):
                 is_eval=True,
                 episodes=config.eval_episode_num,
             )
+            # If configured, log a video prediction of the agent's performance.
             if config.video_pred_log:
                 video_pred = agent._wm.video_pred(next(eval_dataset))
                 logger.video("eval_openl", to_np(video_pred))
         print("Start training.")
+        # Simulate the agent in training mode, updating its parameters based on interactions with the environment.
         state = tools.simulate(
             agent,
             train_envs,
@@ -327,6 +364,7 @@ def main(config):
             steps=config.eval_every,
             state=state,
         )
+        # Enhance Data Set
         items_to_save = {
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
