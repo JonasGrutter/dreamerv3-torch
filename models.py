@@ -127,7 +127,7 @@ class WorldModel(nn.Module):
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         # discount (batch_size, batch_length)
-        # Preprocess the input data (e.g., normalize images, prepare discounts).
+        # Preprocess the input data (e.g., normalize images, prepare discounts). TRANSFORM AS TORCH TENSOR
         data = self.preprocess(data)
 
         # Enable gradient computation and automatic mixed precision if configured.

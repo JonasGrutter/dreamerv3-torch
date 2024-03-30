@@ -3,6 +3,10 @@ import gym
 import numpy as np
 import uuid
 
+import torch
+
+to_np = lambda x: x.detach().cpu().numpy()
+
 
 class TimeLimit(gym.Wrapper):
     def __init__(self, env, duration):
@@ -43,6 +47,41 @@ class NormalizeActions(gym.Wrapper):
         original = np.where(self._mask, original, action)
         return self.env.step(original)
 
+
+class OrbitNumpy(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+
+    def step(self, action):
+        # Transform Action to torch tensor
+        action_torch = torch.tensor(action, device=self.env.device)
+        # Orbit Env Stepping
+        obs_dict, rew, terminated, truncated, extras = self.env.step(action_torch)
+        # rew: torch tensor, terminated: torch tensor, extras['log']: float but extras 
+        
+        # compute dones for compatibility with RSL-RL
+        dones = (terminated | truncated).to(dtype=torch.long)
+        # move extra observations to the extras dict
+        obs = obs_dict["policy"] # 
+        extras["observations"] = obs_dict
+        # move time out information to the extras dict
+        # this is only needed for infinite horizon tasks
+        if not self.unwrapped.cfg.is_finite_horizon:
+            extras["time_outs"] = to_np(truncated)
+        # Convert to numpy
+        obs_np =  to_np(obs)
+        rew_np =  to_np(rew)
+        done_np = to_np(dones)
+
+        for key in extras['episode_neg_term_counts']:
+            extras['episode_neg_term_counts'][key] = to_np(extras['episode_neg_term_counts'][key])
+
+        for key in extras['episode_pos_term_counts']:
+            extras['episode_neg_term_counts'][key] = to_np(extras['episode_neg_term_counts'][key])
+
+
+        return obs_np, rew_np, done_np, extras
 
 class OneHotAction(gym.Wrapper):
     def __init__(self, env):

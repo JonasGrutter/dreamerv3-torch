@@ -128,7 +128,7 @@ class Logger:
 def simulate(
     agent,
     envs,
-    cache,
+    cache, #
     directory,
     logger,
     is_eval=False,
@@ -182,7 +182,7 @@ def simulate(
             action = np.array(action)
         assert len(action) == len(envs)
         # Perform actions in each environment and observe the results.
-        results = [e.step(a) for e, a in zip(envs, action)] # ENV Interraction
+        results = [e.step(a) for e, a in zip(envs, action)] # ENV INTERRACTION
          # Unpack results to update simulation state.
         results = [r() for r in results]
         obs, reward, done = zip(*[p[:3] for p in results])
@@ -254,7 +254,7 @@ def simulate(
         while len(cache) > 1:
             # FIFO
             cache.popitem(last=False)
-    return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
+    return (step - steps, episode - episodes, done, length, obs, agent_state, reward) # All of these are numpy 
 
 
 def add_to_cache(cache, id, transition):
