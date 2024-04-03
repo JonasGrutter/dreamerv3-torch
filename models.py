@@ -35,7 +35,7 @@ class WorldModel(nn.Module):
         self._use_amp = True if config.precision == 16 else False
         self._config = config
         # Preprocess observation space to get the shapes for encoder input.
-        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        shapes = {k: (v.shape[1],) for k, v in obs_space.spaces.items()} # Orbit: First dim is num_envs
         # Initialize the encoder to process observations into a lower-dimensional embedding.
         self.encoder = networks.MultiEncoder(shapes, **config.encoder)
         # Output dimension of the encoder, used to size the input for other components.
@@ -207,7 +207,8 @@ class WorldModel(nn.Module):
     # this function is called during both rollout and training
     def preprocess(self, obs):
         obs = obs.copy()
-        obs["image"] = torch.Tensor(obs["image"]) / 255.0
+        if "image" in obs:
+            obs["image"] = torch.Tensor(obs["image"]) / 255.0
         if "discount" in obs:
             obs["discount"] *= self._config.discount
             # (batch_size, batch_length) -> (batch_size, batch_length, 1)

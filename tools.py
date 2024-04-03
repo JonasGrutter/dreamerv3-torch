@@ -9,6 +9,7 @@ import time
 import random
 
 import numpy as np
+import uuid
 
 import torch
 from torch import nn
@@ -140,11 +141,11 @@ def simulate(
     # initialize or unpack simulation state
     if state is None:
         step, episode = 0, 0
-        done = np.ones(len(envs), bool)
-        length = np.zeros(len(envs), np.int32) # Tracks whether each environment needs to be reset.
-        obs = [None] * len(envs)# Holds the latest observation from each environment.
+        done = np.ones(envs.num_envs, bool)
+        length = np.zeros(envs.num_envs, np.int32) # Tracks whether each environment needs to be reset.
+        obs = [None] * envs.num_envs# Holds the latest observation from each environment.
         agent_state = None
-        reward = [0] * len(envs)
+        reward = [0] * envs.num_envs
     else:
         # Unpack the provided state if resuming.
         step, episode, done, length, obs, agent_state, reward = state
@@ -153,26 +154,56 @@ def simulate(
     while (steps and step < steps) or (episodes and episode < episodes):
         # Reset environments that are done.
         if done.any():
-            indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.
-            results = [envs[i].reset() for i in indices] # Reset and get initial observations.
-            results = [r() for r in results] # Assume these are async calls, so we get the results.
-            for index, result in zip(indices, results):
-                t = result.copy()
-                t = {k: convert(v) for k, v in t.items()}
-                # action will be added to transition in add_to_cache
-                t["reward"] = 0.0
-                t["discount"] = 1.0
-                # initial state should be added to cache
-                add_to_cache(cache, envs[index].id, t)
-                # replace obs with done by initial state
-                obs[index] = result
+            #indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.
+            #results = [envs[i].reset() for i in indices] # Reset and get initial observations.
+            #results = [r() for r in results] # Assume these are async calls, return the obs
+            
+            #--- ORBIT: Reset terminated envs
+            indices = np.nonzero(done) #torch: indices = done.nonzero()
+            # reset the envs that need to be resetted
+            reset_env_ids = envs.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+            if len(reset_env_ids) > 0:
+                envs.unwrapped.reset_idx(reset_env_ids)
+
+            # Update derived measurements for resetted envs
+            envs.unwrapped.update_derived_measurements(reset_env_ids)
+            # Update the obs at first 
+            envs.obs_buf = envs.unwrapped.observation_manager.compute()
+            envs.unwrapped.last_actions[reset_env_ids] = 0
+            # Rewards have already been updated
+            #rew_np = to_np(envs.reward_manager.compute(dt=envs.step_dt)) # reward have benn calculated in step,
+
+            # Convert obs to the dreamer format
+            obs_dreamer = [
+                {obs_key: envs.obs_buf[obs_key][env_idx].cpu().numpy() for obs_key in envs.obs_buf} # only key is policy anyway
+                for env_idx in range(envs.num_envs)
+            ]
+            # Adapt the obs and cache each transition independently
+            for ids in reset_env_ids:
+                # Adapt obs of new resetted env
+                obs_dreamer[ids]['is_first'] = True
+                obs_dreamer[ids]['is_terminal'] = False
+                 # Give the resetted env a new unique index
+                timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+                id = f"{timestamp}-{str(uuid.uuid4().hex)}"
+                envs.unique_indices[ids] = id
+                # Define the transition
+                transition = obs_dreamer[ids].copy()
+                transition = {k: convert(v) for k, v in transition.items()}
+                transition['rewards'] = 0
+                # t["discount"] = 1.0 Put it or not ?
+                # Cache the transition
+                add_to_cache(cache, envs.unique_indices[ids], transition)
+
+
         # step agents
-        # Prepare observations for the agent.
-        obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
+        # Prepare observations for the agent, put it back in orbit Format haha
+        obs = {k: np.stack([o[k] for o in obs_dreamer]) for k in obs_dreamer[0] if "log_" not in k}
         # Call the agent to get actions to perform in each environment.
         # This is where the world model within the agent is trained, as part of generating the action.
         action, agent_state = agent(obs, done, agent_state) # WORLD MODEL TRAINING, TODO: THIS GIVES NUMPY ARRAY
-        if isinstance(action, dict):
+        
+        '''if isinstance(action, dict):
             # Convert actions to the appropriate format for each environment
             action = [
                 {k: np.array(action[k][i].detach().cpu()) for k in action}
@@ -180,48 +211,61 @@ def simulate(
             ]
         else:
             action = np.array(action)
-        assert len(action) == len(envs)
-        # Perform actions in each environment and observe the results.
-        results = [e.step(a) for e, a in zip(envs, action)] # ENV INTERRACTION
-         # Unpack results to update simulation state.
-        results = [r() for r in results]
-        obs, reward, done = zip(*[p[:3] for p in results])
-        obs = list(obs)
-        reward = list(reward)
-        done = np.stack(done)
+        assert len(action) == len(envs)'''
+        ## Perform actions in each environment and observe the results.
+        #results = [e.step(a) for e, a in zip(envs, action)] # ENV INTERRACTION
+        # # Unpack results to update simulation state.
+        #results = [r() for r in results]
+        #obs, reward, done = zip(*[p[:3] for p in results])
+
+        # due to the wrapper the format of the obs, rew, done is already dreamer format
+        obs_np, rew_np, done_np, extras = envs.step(action['action'])
+        # Add necessary obs to orbit
+        # Iterate over each observation and the corresponding done flag
+        for i in range(len(obs_np)): #NOTE: Can be put in next loop if stuff in the middle useless
+            # Add the 'is_terminal' key with the value of the done flag
+            obs_np[i]['is_terminal'] = done_np[i]
+            obs_np[i]['is_first'] = False
+        
+        # Log
+        obs = list(obs_np)
+        reward = list(rew_np)
+        done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
-        step += len(envs)
+        step += envs.unwrapped.num_envs #len(envs)
         length *= 1 - done
-        # add to cache
-        for a, result, env in zip(action, results, envs):
-            o, r, d, info = result
-            o = {k: convert(v) for k, v in o.items()}
-            transition = o.copy()
-            if isinstance(a, dict):
-                transition.update(a)
-            else:
-                transition["action"] = a
-            transition["reward"] = r
-            transition["discount"] = info.get("discount", np.array(1 - float(d)))
-            add_to_cache(cache, env.id, transition)
 
+        # Cache all the envs
+        for i in range(envs.num_envs):
+            # Get data for each env
+            o = obs_np[i]
+            o = {k: convert(v) for k, v in o.items()}
+            r = rew_np[i]
+            d = done_np[i]
+            # Define the transition
+            transition = o.copy()
+            transition["action"] =  to_np(action['action'])[0]
+            transition["reward"] = r
+            # Did not put discout otherwise transition["discount"] = 1
+            add_to_cache(cache, envs.unique_indices[i], transition)
+        
         if done.any():
             indices = [index for index, d in enumerate(done) if d]
             # logging for done episode
             for i in indices:
-                save_episodes(directory, {envs[i].id: cache[envs[i].id]})
-                length = len(cache[envs[i].id]["reward"]) - 1
-                score = float(np.array(cache[envs[i].id]["reward"]).sum())
-                video = cache[envs[i].id]["image"]
+                #save_episodes(directory, {envs[i].id: cache[envs[i].id]})
+                length = len(cache[envs.unique_indices[i]]["reward"]) - 1
+                score = float(np.array(cache[envs.unique_indices[i]]["reward"]).sum())
+                #video = cache[envs[i].id]["image"]
                 # record logs given from environments
-                for key in list(cache[envs[i].id].keys()):
+                for key in list(cache[envs.unique_indices[i]].keys()):
                     if "log_" in key:
                         logger.scalar(
-                            key, float(np.array(cache[envs[i].id][key]).sum())
+                            key, float(np.array(cache[envs.unique_indices[i]][key]).sum())
                         )
                         # log items won't be used later
-                        cache[envs[i].id].pop(key)
+                        cache[envs.unique_indices[i]].pop(key)
 
                 if not is_eval:
                     step_in_dataset = erase_over_episodes(cache, limit)
@@ -230,30 +274,8 @@ def simulate(
                     logger.scalar(f"train_length", length)
                     logger.scalar(f"train_episodes", len(cache))
                     logger.write(step=logger.step)
-                else:
-                    if not "eval_lengths" in locals():
-                        eval_lengths = []
-                        eval_scores = []
-                        eval_done = False
-                    # start counting scores for evaluation
-                    eval_scores.append(score)
-                    eval_lengths.append(length)
 
-                    score = sum(eval_scores) / len(eval_scores)
-                    length = sum(eval_lengths) / len(eval_lengths)
-                    logger.video(f"eval_policy", np.array(video)[None])
 
-                    if len(eval_scores) >= episodes and not eval_done:
-                        logger.scalar(f"eval_return", score)
-                        logger.scalar(f"eval_length", length)
-                        logger.scalar(f"eval_episodes", len(eval_scores))
-                        logger.write(step=logger.step)
-                        eval_done = True
-    if is_eval:
-        # keep only last item for saving memory. this cache is used for video_pred later
-        while len(cache) > 1:
-            # FIFO
-            cache.popitem(last=False)
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward) # All of these are numpy 
 
 

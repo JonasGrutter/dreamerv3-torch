@@ -47,14 +47,11 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-# load cheaper kit config in headless
-if args_cli.headless:
-    app_experience = f"{os.environ['EXP_PATH']}/omni.isaac.sim.python.gym.headless.kit"
-else:
-    app_experience = f"{os.environ['EXP_PATH']}/omni.isaac.sim.python.kit"
+args_cli.num_envs = 4
+args_cli.task='Isaac-m545-v0'
 
 # launch omniverse app
-app_launcher = AppLauncher(args_cli, experience=app_experience)
+app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from datetime import datetime
@@ -65,6 +62,7 @@ import omni.isaac.orbit_tasks  # noqa: F401
 from omni.isaac.orbit_tasks.utils import get_checkpoint_path, parse_env_cfg
 from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 import carb
+args_cli.task = 'Isaac-m545-v0'
 
 
 #----- ORBIT-End
@@ -73,8 +71,12 @@ to_np = lambda x: x.detach().cpu().numpy()
 
 # Dreamer class implements the Dreamer agent model, integrating a world model and behavior models for decision making.
 class Dreamer(nn.Module):
-    def __init__(self, obs_space, act_space, config, logger, dataset):
+    def __init__(self, obs_space, act_space, config, logger, dataset, env):
         super(Dreamer, self).__init__()
+        # Store config from Orbit
+        self.envs = make_env_orbit()
+        self.envs.reset()
+        
         # Store the configuration settings, logger, and dataset for use within the class.
         self._config = config
         self._logger = logger
@@ -121,7 +123,7 @@ class Dreamer(nn.Module):
                 else self._should_train(step)
             )
             for _ in range(steps):
-                self._train(next(self._dataset))
+                self._train(next(self._dataset)) # iterator on next element of data set
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
             if self._should_log(step):
@@ -195,7 +197,6 @@ class Dreamer(nn.Module):
             else:
                 self._metrics[name].append(value)
 
-
 def count_steps(folder):
     return sum(int(str(n).split("-")[-1][:-4]) - 1 for n in folder.glob("*.npz"))
 
@@ -208,6 +209,9 @@ def make_dataset(episodes, config):
 
 def make_env(config, mode, id):
     suite, task = config.task.split("_", 1)
+
+    #suite = "orbit"
+
     if suite == "dmc":
         import envs.dmc as dmc
 
@@ -263,25 +267,35 @@ def make_env(config, mode, id):
     env = wrappers.UUID(env)
     if suite == "minecraft":
         env = wrappers.RewardObs(env)
-    
-    if suite == "orbit":
-        env_cfg: RLTaskEnvCfg = parse_env_cfg(args_cli.task, use_gpu=not args_cli.cpu, num_envs=args_cli.num_envs)
-        agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
-        # specify directory for logging experiments
-        log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
-        log_root_path = os.path.abspath(log_root_path)
-        print(f"[INFO] Logging experiment in directory: {log_root_path}")
-        # specify directory for logging runs: {time-stamp}_{run_name}
-        log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        if agent_cfg.run_name:
-            log_dir += f"_{agent_cfg.run_name}"
-        log_dir = os.path.join(log_root_path, log_dir)
-
-        # create isaac environment
-        env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     return env
+
+    #----- ORBIT-Start
+
+def make_env_orbit():
+
+    env_cfg: RLTaskEnvCfg = parse_env_cfg(args_cli.task, use_gpu=not args_cli.cpu, num_envs=args_cli.num_envs)
+    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+
+    # specify directory for logging experiments
+    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.abspath(log_root_path)
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    # specify directory for logging runs: {time-stamp}_{run_name}
+    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if agent_cfg.run_name:
+        log_dir += f"_{agent_cfg.run_name}"
+    log_dir = os.path.join(log_root_path, log_dir)
+
+    # create isaac environment
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    #wrap it
+    env = wrappers.OrbitNumpy(env)
+
+    return env
+
+    #----- ORBIT-End
 
 # Main function to configure and execute the training of the Dreamer model.
 def main(config):
@@ -326,19 +340,26 @@ def main(config):
     # Repeat the process for evaluation episodes, with a limit of 1 to possibly denote a single batch or episode.
     eval_eps = tools.load_episodes(directory, limit=1)
     # Define a function for creating environments, parameterized by mode (train or eval) and ID.
-    make = lambda mode, id: make_env(config, mode, id)
+    
+    # -- Orbit
+    train_envs = make_env_orbit()
+    train_envs.reset()
+    # -- Orbit
+    
+    #make_env(config, mode, id)
+    #make = lambda mode, id: make_env(config, mode, id)
     # Create training and evaluation environments for each configured environment instance.
-    train_envs = [make("train", i) for i in range(config.envs)]
-    eval_envs = [make("eval", i) for i in range(config.envs)]
+    #train_envs = [make("train", i) for i in range(config.envs)]
     # If configured for parallel execution, wrap environments for parallel processing; otherwise, use a dummy wrapper.
     if config.parallel:
         train_envs = [Parallel(env, "process") for env in train_envs]
-        eval_envs = [Parallel(env, "process") for env in eval_envs]
     else:
-        train_envs = [Damy(env) for env in train_envs]
-        eval_envs = [Damy(env) for env in eval_envs]
+        #train_envs = Damy(train_envs)
+        pass
+    
     # Determine the action space from the first training environment and log it.
-    acts = train_envs[0].action_space
+    from gym.spaces import Box
+    acts = Box(-1.0, 1.0, (train_envs.m545_measurements.num_dofs,), 'float32') #train_envs.action_space
     print("Action Space", acts)
     # Set the number of actions in the configuration based on the determined action space.
     config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
@@ -386,11 +407,11 @@ def main(config):
     print("Simulate agent.")
     # Create training and evaluation datasets from loaded episodes.
     train_dataset = make_dataset(train_eps, config)
-    eval_dataset = make_dataset(eval_eps, config)
+
     # Initialize the Dreamer agent with the specified configurations and datasets.
     agent = Dreamer(
-        train_envs[0].observation_space,
-        train_envs[0].action_space,
+        train_envs.observation_space,
+        train_envs.action_space,
         config,
         logger,
         train_dataset,
@@ -404,28 +425,13 @@ def main(config):
         # Ensure the agent does not pretrain again if it has already completed pretraining.
         agent._should_pretrain._once = False
 
+    #---------------- TRAINING LOOP ---------------#
+
     # make sure eval will be executed once after config.steps
     while agent._step < config.steps + config.eval_every:
         logger.write()
         # If the configuration specifies evaluation episodes, proceed with evaluation.
-        if config.eval_episode_num > 0:
-            print("Start evaluation.")
-            # Define the evaluation policy, making sure the agent is in evaluation mode (no training).
-            eval_policy = functools.partial(agent, training=False)
-            # Simulate the agent in evaluation mode across the evaluation environments.
-            tools.simulate(
-                eval_policy,
-                eval_envs,
-                eval_eps,
-                config.evaldir,
-                logger,
-                is_eval=True,
-                episodes=config.eval_episode_num,
-            )
-            # If configured, log a video prediction of the agent's performance.
-            if config.video_pred_log:
-                video_pred = agent._wm.video_pred(next(eval_dataset))
-                logger.video("eval_openl", to_np(video_pred))
+
         print("Start training.")
         # Simulate the agent in training mode, updating its parameters based on interactions with the environment.
         state = tools.simulate(
@@ -444,15 +450,8 @@ def main(config):
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
         }
         torch.save(items_to_save, logdir / "latest.pt")
-    for env in train_envs + eval_envs:
-        try:
-            env.close()
-        except Exception:
-            pass
 
 
-
-    
 if __name__ == "__main__":
     try:
         # Bypass all the args parsing
