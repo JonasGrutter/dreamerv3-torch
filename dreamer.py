@@ -47,8 +47,9 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 1000
+args_cli.num_envs = 2
 args_cli.task='Isaac-m545-v0'
+ORBIT = False
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -209,7 +210,9 @@ def make_dataset(episodes, config):
 
 
 
-    #----- ORBIT-Start
+
+
+#----- ORBIT-Start
 
 def make_env_orbit():
 

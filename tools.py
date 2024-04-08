@@ -240,7 +240,7 @@ def simulate(
         done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
-        step += 1 #len(envs)
+        step += envs.num_envs #len(envs)
         length *= 1 - done
 
         # Cache all the envs
