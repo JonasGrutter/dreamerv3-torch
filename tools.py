@@ -143,15 +143,15 @@ def simulate(
         step, episode = 0, 0
         done = np.ones(envs.num_envs, bool)
         length = np.zeros(envs.num_envs, np.int32) # Tracks whether each environment needs to be reset.
-        obs = [None] * envs.num_envs# Holds the latest observation from each environment.
+        obs_dreamer = [None] * envs.num_envs# Holds the latest observation from each environment.
         agent_state = None
         reward = [0] * envs.num_envs
     else:
         # Unpack the provided state if resuming.
-        step, episode, done, length, obs, agent_state, reward = state
+        step, episode, done, length, obs_dreamer, agent_state, reward = state
 
     # Main simulation loop.
-    while (steps and step < steps) or (episodes and episode < episodes):
+    while (steps and step < steps): # or (episodes and episode < episodes)
         # Reset environments that are done.
         if done.any():
             #indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.
@@ -174,27 +174,34 @@ def simulate(
             #rew_np = to_np(envs.reward_manager.compute(dt=envs.step_dt)) # reward have benn calculated in step,
 
             # Convert obs to the dreamer format
+            # Here: For all the envs, 
             obs_dreamer = [
                 {obs_key: envs.obs_buf[obs_key][env_idx].cpu().numpy() for obs_key in envs.obs_buf} # only key is policy anyway
                 for env_idx in range(envs.num_envs)
             ]
-            # Adapt the obs and cache each transition independently
-            for ids in reset_env_ids:
-                # Adapt obs of new resetted env
-                obs_dreamer[ids]['is_first'] = True
-                obs_dreamer[ids]['is_terminal'] = False
-                 # Give the resetted env a new unique index
-                timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-                id = f"{timestamp}-{str(uuid.uuid4().hex)}"
-                envs.unique_indices[ids] = id
-                # Define the transition
-                transition = obs_dreamer[ids].copy()
-                transition = {k: convert(v) for k, v in transition.items()}
-                transition['rewards'] = 0
-                # t["discount"] = 1.0 Put it or not ?
-                # Cache the transition
-                add_to_cache(cache, envs.unique_indices[ids], transition)
-
+        
+            # If we add is_first and is_terminal to the orbit obs then we would just need to loop through reset_env_ids
+            for ids in range(envs.num_envs):
+                # Cache Resetted state and ger
+                if ids in reset_env_ids:
+                    # Adapt obs of new resetted env
+                    obs_dreamer[ids]['is_first'] = True
+                    obs_dreamer[ids]['is_terminal'] = False
+                    # Give the resetted env a new unique index
+                    timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+                    id = f"{timestamp}-{str(uuid.uuid4().hex)}"
+                    envs.unique_indices[ids] = id
+                    # Define the transition
+                    transition = obs_dreamer[ids].copy()
+                    transition = {k: convert(v) for k, v in transition.items()}
+                    transition['reward'] = 0
+                    # t["discount"] = 1.0 Put it or not ?
+                    # Cache the transition
+                    add_to_cache(cache, envs.unique_indices[ids], transition)
+                else:
+                    # Adapt obs for not resetted env since is_first and is_terminal have been remobved in envs.unwrapped.observation_manager.compute()
+                    obs_dreamer[ids]['is_first'] = False
+                    obs_dreamer[ids]['is_terminal'] = False
 
         # step agents
         # Prepare observations for the agent, put it back in orbit Format haha
@@ -219,27 +226,27 @@ def simulate(
         #obs, reward, done = zip(*[p[:3] for p in results])
 
         # due to the wrapper the format of the obs, rew, done is already dreamer format
-        obs_np, rew_np, done_np, extras = envs.step(action['action'])
+        obs_dreamer, rew_np, done_np, extras = envs.step(action['action'])
         # Add necessary obs to orbit
         # Iterate over each observation and the corresponding done flag
-        for i in range(len(obs_np)): #NOTE: Can be put in next loop if stuff in the middle useless
+        for i in range(len(obs_dreamer)): #NOTE: Can be put in next loop if stuff in the middle useless
             # Add the 'is_terminal' key with the value of the done flag
-            obs_np[i]['is_terminal'] = done_np[i]
-            obs_np[i]['is_first'] = False
+            obs_dreamer[i]['is_terminal'] = done_np[i]
+            obs_dreamer[i]['is_first'] = False
         
         # Log
-        obs = list(obs_np)
+        obs = list(obs_dreamer)
         reward = list(rew_np)
         done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
-        step += envs.unwrapped.num_envs #len(envs)
+        step += 1 #len(envs)
         length *= 1 - done
 
         # Cache all the envs
         for i in range(envs.num_envs):
             # Get data for each env
-            o = obs_np[i]
+            o = obs_dreamer[i]
             o = {k: convert(v) for k, v in o.items()}
             r = rew_np[i]
             d = done_np[i]

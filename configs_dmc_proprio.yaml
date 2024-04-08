@@ -1,14 +1,15 @@
-logdir: './logdir/dmc_walker_walk'
+logdir: null
 traindir: null
 evaldir: null
 offline_traindir: ''
 offline_evaldir: ''
 seed: 0
 deterministic_run: False
-steps: !!float 1e6
+steps: 5e5
 parallel: False
-eval_episode_num: 10
-log_every: !!float 1e4
+eval_every: 1e4
+eval_episode_num: 0
+log_every: 1e4
 reset_every: 0
 device: 'cuda:0'
 compile: True
@@ -19,11 +20,11 @@ video_pred_log: False
 # Environment
 task: 'dmc_walker_walk'
 size: [64, 64]
+envs: 2
 action_repeat: 2
 time_limit: 1000
 grayscale: False
-prefill: 30
-eval_every: !!float 30
+prefill: 2500
 reward_EMA: True
 
 # Model
@@ -43,10 +44,14 @@ encoder:
   {mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 5, mlp_units: 1024, symlog_inputs: True}
 decoder:
   {mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 5, mlp_units: 1024, cnn_sigmoid: False, image_dist: mse, vector_dist: symlog_mse, outscale: 1.0}
-actor: {layers: 2, dist: 'normal', entropy: !!float 3e-4, unimix_ratio: 0.01, std: 'learned', min_std: 0.1, max_std: 1.0, temp: 0.1, lr: !!float 3e-5, eps: !!float 1e-5, grad_clip: 100.0, outscale: 1.0}
-critic: {layers: 2, dist: 'symlog_disc', slow_target: True, slow_target_update: 1, slow_target_fraction: 0.02, lr: !!float 3e-5, eps: !!float 1e-5, grad_clip: 100.0, outscale: 0.0}
-reward_head: {layers: 2, dist: 'symlog_disc', loss_scale: 1.0, outscale: 0.0}
-cont_head: {layers: 2, loss_scale: 1.0, outscale: 1.0}
+actor:
+  {layers: 2, dist: 'normal', entropy: 3e-4, unimix_ratio: 0.01, std: 'learned', min_std: 0.1, max_std: 1.0, temp: 0.1, lr: 3e-5, eps: 1e-5, grad_clip: 100.0, outscale: 1.0}
+critic:
+  {layers: 2, dist: 'symlog_disc', slow_target: True, slow_target_update: 1, slow_target_fraction: 0.02, lr: 3e-5, eps: 1e-5, grad_clip: 100.0, outscale: 0.0}
+reward_head:
+  {layers: 2, dist: 'symlog_disc', loss_scale: 1.0, outscale: 0.0}
+cont_head:
+  {layers: 2, loss_scale: 1.0, outscale: 1.0}
 dyn_scale: 0.5
 rep_scale: 0.1
 kl_free: 1.0
@@ -59,8 +64,8 @@ batch_size: 16
 batch_length: 64
 train_ratio: 512
 pretrain: 100
-model_lr: !!float 1e-4
-opt_eps: !!float 1e-8
+model_lr: 1e-4
+opt_eps: 1e-8
 grad_clip: 1000
 dataset_size: 1000000
 opt: 'adam'

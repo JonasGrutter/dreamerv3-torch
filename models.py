@@ -37,7 +37,7 @@ class WorldModel(nn.Module):
         # Preprocess observation space to get the shapes for encoder input.
         shapes = {k: (v.shape[1],) for k, v in obs_space.spaces.items()} # Orbit: First dim is num_envs
         # Initialize the encoder to process observations into a lower-dimensional embedding.
-        self.encoder = networks.MultiEncoder(shapes, **config.encoder)
+        self.encoder = networks.MultiEncoder(shapes, **vars(config.encoder))
         # Output dimension of the encoder, used to size the input for other components.
         self.embed_size = self.encoder.outdim
         # Initialize the RSSM dynamics model with configuration parameters.
@@ -67,17 +67,17 @@ class WorldModel(nn.Module):
             feat_size = config.dyn_stoch + config.dyn_deter
         # Initialize decoder and reward prediction head with the computed feature size.
         self.heads["decoder"] = networks.MultiDecoder(
-            feat_size, shapes, **config.decoder
+            feat_size, shapes, **vars(config.decoder)
         )
         self.heads["reward"] = networks.MLP(
             feat_size,
-            (255,) if config.reward_head["dist"] == "symlog_disc" else (),
-            config.reward_head["layers"],
+            (255,) if config.reward_head.dist == "symlog_disc" else (),
+            config.reward_head.layers,
             config.units,
             config.act,
             config.norm,
-            dist=config.reward_head["dist"],
-            outscale=config.reward_head["outscale"],
+            dist=config.reward_head.dist,
+            outscale=config.reward_head.outscale,
             device=config.device,
             name="Reward",
         )
@@ -85,12 +85,12 @@ class WorldModel(nn.Module):
         self.heads["cont"] = networks.MLP(
             feat_size,
             (),
-            config.cont_head["layers"],
+            config.cont_head.layers,
             config.units,
             config.act,
             config.norm,
             dist="binary",
-            outscale=config.cont_head["outscale"],
+            outscale=config.cont_head.outscale,
             device=config.device,
             name="Cont",
         )
@@ -113,8 +113,8 @@ class WorldModel(nn.Module):
         )
         # Loss scaling factors for reward and continuation heads.
         self._scales = dict(
-            reward=config.reward_head["loss_scale"],
-            cont=config.cont_head["loss_scale"],
+            reward=config.reward_head.loss_scale,
+            cont=config.cont_head.loss_scale,
         )
 
     # Train the world model on a batch of data.
@@ -260,34 +260,34 @@ class ImagBehavior(nn.Module):
         self.actor = networks.MLP(
             feat_size,
             (config.num_actions,),
-            config.actor["layers"],
+            config.actor.layers,
             config.units,
             config.act,
             config.norm,
-            config.actor["dist"],
-            config.actor["std"],
-            config.actor["min_std"],
-            config.actor["max_std"],
+            config.actor.dist,
+            config.actor.std,
+            config.actor.min_std,
+            config.actor.max_std,
             absmax=1.0,
-            temp=config.actor["temp"],
-            unimix_ratio=config.actor["unimix_ratio"],
-            outscale=config.actor["outscale"],
+            temp=config.actor.temp,
+            unimix_ratio=config.actor.unimix_ratio,
+            outscale=config.actor.outscale,
             name="Actor",
         )
         # Initialize value network with the calculated feature size and configuration parameters
         self.value = networks.MLP(
             feat_size,
-            (255,) if config.critic["dist"] == "symlog_disc" else (),
-            config.critic["layers"],
+            (255,) if config.critic.dist == "symlog_disc" else (),
+            config.critic.layers,
             config.units,
             config.act,
             config.norm,
-            config.critic["dist"],
-            outscale=config.critic["outscale"],
+            config.critic.dist,
+            outscale=config.critic.outscale,
             device=config.device,
             name="Value",
         )
-        if config.critic["slow_target"]:
+        if config.critic.slow_target:
             self._slow_value = copy.deepcopy(self.value)
             self._updates = 0
         # Initialize optimizers for actor and value networks with specified parameters and weight decay
@@ -295,9 +295,9 @@ class ImagBehavior(nn.Module):
         self._actor_opt = tools.Optimizer(
             "actor",
             self.actor.parameters(),
-            config.actor["lr"],
-            config.actor["eps"],
-            config.actor["grad_clip"],
+            config.actor.lr,
+            config.actor.eps,
+            config.actor.grad_clip,
             **kw,
         )
         # Log the number of variables in the actor optimizer
@@ -307,9 +307,9 @@ class ImagBehavior(nn.Module):
         self._value_opt = tools.Optimizer(
             "value",
             self.value.parameters(),
-            config.critic["lr"],
-            config.critic["eps"],
-            config.critic["grad_clip"],
+            config.critic.lr,
+            config.critic.eps,
+            config.critic.grad_clip,
             **kw,
         )
         print(
@@ -353,7 +353,7 @@ class ImagBehavior(nn.Module):
                     base,
                 )
                 # Actor update
-                actor_loss -= self._config.actor["entropy"] * actor_ent[:-1, ..., None]
+                actor_loss -= self._config.actor.entropy * actor_ent[:-1, ..., None]
                 actor_loss = torch.mean(actor_loss)
                 metrics.update(mets)
                 value_input = imag_feat
@@ -366,7 +366,7 @@ class ImagBehavior(nn.Module):
                 # (time, batch, 1), (time, batch, 1) -> (time, batch)
                 value_loss = -value.log_prob(target.detach())
                 slow_target = self._slow_value(value_input[:-1].detach())
-                if self._config.critic["slow_target"]:
+                if self._config.critic.slow_target:
                     value_loss -= value.log_prob(slow_target.mode().detach())
                 # (time, batch, 1), (time, batch, 1) -> (1,)
                 #  discrepancy between the predicted values by the value network and the computed targets,
@@ -375,7 +375,7 @@ class ImagBehavior(nn.Module):
         metrics.update(tools.tensorstats(value.mode(), "value"))
         metrics.update(tools.tensorstats(target, "target"))
         metrics.update(tools.tensorstats(reward, "imag_reward"))
-        if self._config.actor["dist"] in ["onehot"]:
+        if self._config.actor.dist in ["onehot"]:
             metrics.update(
                 tools.tensorstats(
                     torch.argmax(imag_action, dim=-1).float(), "imag_action"
@@ -496,10 +496,10 @@ class ImagBehavior(nn.Module):
 
     def _update_slow_target(self):
         # Check if the slow target update mechanism is enabled.
-        if self._config.critic["slow_target"]:
+        if self._config.critic.slow_target:
             # Perform an update only at specified intervals.
-            if self._updates % self._config.critic["slow_target_update"] == 0:
-                mix = self._config.critic["slow_target_fraction"]  # The mixing ratio for the slow target update.
+            if self._updates % self._config.critic.slow_target_update == 0:
+                mix = self._config.critic.slow_target_fraction  # The mixing ratio for the slow target update.
                 # Update the slow target parameters by mixing them with the main network parameters.
                 for s, d in zip(self.value.parameters(), self._slow_value.parameters()):
                     d.data = mix * s.data + (1 - mix) * d.data

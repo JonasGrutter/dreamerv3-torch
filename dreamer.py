@@ -16,6 +16,7 @@ import models
 import tools
 import envs.wrappers as wrappers
 from parallel import Parallel, Damy
+from gym.spaces import Box
 
 import torch
 from torch import nn
@@ -27,7 +28,6 @@ from torch import distributions as torchd
 import argparse
 import os
 import traceback
-
 from omni.isaac.orbit.app import AppLauncher
 
 # local imports
@@ -47,7 +47,7 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 4
+args_cli.num_envs = 1000
 args_cli.task='Isaac-m545-v0'
 
 # launch omniverse app
@@ -64,6 +64,10 @@ from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg,
 import carb
 args_cli.task = 'Isaac-m545-v0'
 
+# For Pre training
+from rsl_rl.runners import OnPolicyRunner
+
+
 
 #----- ORBIT-End
 
@@ -71,12 +75,11 @@ to_np = lambda x: x.detach().cpu().numpy()
 
 # Dreamer class implements the Dreamer agent model, integrating a world model and behavior models for decision making.
 class Dreamer(nn.Module):
-    def __init__(self, obs_space, act_space, config, logger, dataset, env):
+    def __init__(self, envs, config, logger, dataset):
         super(Dreamer, self).__init__()
-        # Store config from Orbit
-        self.envs = make_env_orbit()
-        self.envs.reset()
-        
+        # Environment storing       
+        self.envs = envs
+        self.act_space = Box(-1, 1, (self.envs.num_envs, 4), 'float32')
         # Store the configuration settings, logger, and dataset for use within the class.
         self._config = config
         self._logger = logger
@@ -95,7 +98,7 @@ class Dreamer(nn.Module):
         self._update_count = 0
         self._dataset = dataset
         # Initialize the world model with the observation space, action space, current step, and configuration.
-        self._wm = models.WorldModel(obs_space, act_space, self._step, config)
+        self._wm = models.WorldModel(self.envs.observation_space, self.act_space, self._step, config)
         # Initialize the behavior model for task-specific actions using the world model.
         self._task_behavior = models.ImagBehavior(config, self._wm)
         if (
@@ -105,10 +108,10 @@ class Dreamer(nn.Module):
             self._task_behavior = torch.compile(self._task_behavior)
         # Define the exploration behavior based on the configuration. This can be greedy, random, or plan2explore.
         reward = lambda f, s, a: self._wm.heads["reward"](f).mean()
-            # Dynamically select the exploration behavior based on the configuration setting.
+        # Dynamically select the exploration behavior based on the configuration setting.
         self._expl_behavior = dict(
             greedy=lambda: self._task_behavior,
-            random=lambda: expl.Random(config, act_space),
+            random=lambda: expl.Random(config, self.act_space),
             plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
         )[config.expl_behavior]().to(self._config.device)
 
@@ -122,7 +125,7 @@ class Dreamer(nn.Module):
                 if self._should_pretrain()
                 else self._should_train(step)
             )
-            for _ in range(steps):
+            for _ in range(steps):#500
                 self._train(next(self._dataset)) # iterator on next element of data set
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
@@ -165,7 +168,7 @@ class Dreamer(nn.Module):
         logprob = actor.log_prob(action)
         latent = {k: v.detach() for k, v in latent.items()}
         action = action.detach()
-        if self._config.actor["dist"] == "onehot_gumble":
+        if self._config.actor.dist == "onehot_gumble":
             action = torch.one_hot(
                 torch.argmax(action, dim=-1), self._config.num_actions
             )
@@ -174,19 +177,17 @@ class Dreamer(nn.Module):
         return policy_output, state
 
     def _train(self, data):
-        '''
-            train world model -> dynamics learning
-        '''
+        # World Model Training
         metrics = {}
+        #print("Train world model")
         post, context, mets = self._wm._train(data)
         metrics.update(mets)
         start = post
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
-        """
-            train actor critic
-        """
+        # Actor Critic Learning
+        #print("Train Actor Critic")
         metrics.update(self._task_behavior._train(start, reward)[-1])
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
@@ -207,69 +208,6 @@ def make_dataset(episodes, config):
     return dataset
 
 
-def make_env(config, mode, id):
-    suite, task = config.task.split("_", 1)
-
-    #suite = "orbit"
-
-    if suite == "dmc":
-        import envs.dmc as dmc
-
-        env = dmc.DeepMindControl(
-            task, config.action_repeat, config.size, seed=config.seed + id
-        )
-        env = wrappers.NormalizeActions(env)
-    elif suite == "atari":
-        import envs.atari as atari
-
-        env = atari.Atari(
-            task,
-            config.action_repeat,
-            config.size,
-            gray=config.grayscale,
-            noops=config.noops,
-            lives=config.lives,
-            sticky=config.stickey,
-            actions=config.actions,
-            resize=config.resize,
-            seed=config.seed + id,
-        )
-        env = wrappers.OneHotAction(env)
-    elif suite == "dmlab":
-        import envs.dmlab as dmlab
-
-        env = dmlab.DeepMindLabyrinth(
-            task,
-            mode if "train" in mode else "test",
-            config.action_repeat,
-            seed=config.seed + id,
-        )
-        env = wrappers.OneHotAction(env)
-    elif suite == "memorymaze":
-        from envs.memorymaze import MemoryMaze
-
-        env = MemoryMaze(task, seed=config.seed + id)
-        env = wrappers.OneHotAction(env)
-    elif suite == "crafter":
-        import envs.crafter as crafter
-
-        env = crafter.Crafter(task, config.size, seed=config.seed + id)
-        env = wrappers.OneHotAction(env)
-    elif suite == "minecraft":
-        import envs.minecraft as minecraft
-
-        env = minecraft.make_env(task, size=config.size, break_speed=config.break_speed)
-        env = wrappers.OneHotAction(env)
-    else:
-        raise NotImplementedError(suite)
-    env = wrappers.TimeLimit(env, config.time_limit)
-    env = wrappers.SelectAction(env, key="action")
-    env = wrappers.UUID(env)
-    if suite == "minecraft":
-        env = wrappers.RewardObs(env)
-
-
-    return env
 
     #----- ORBIT-Start
 
@@ -278,6 +216,9 @@ def make_env_orbit():
     env_cfg: RLTaskEnvCfg = parse_env_cfg(args_cli.task, use_gpu=not args_cli.cpu, num_envs=args_cli.num_envs)
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
+
+    # Override env cfg
+    env_cfg.reset.only_above_soil = True
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -292,6 +233,7 @@ def make_env_orbit():
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     #wrap it
     env = wrappers.OrbitNumpy(env)
+
 
     return env
 
@@ -337,32 +279,15 @@ def main(config):
         directory = config.offline_evaldir.format(**vars(config))
     else:
         directory = config.evaldir
-    # Repeat the process for evaluation episodes, with a limit of 1 to possibly denote a single batch or episode.
-    eval_eps = tools.load_episodes(directory, limit=1)
-    # Define a function for creating environments, parameterized by mode (train or eval) and ID.
-    
-    # -- Orbit
+        # -- Orbit
     train_envs = make_env_orbit()
     train_envs.reset()
     # -- Orbit
-    
-    #make_env(config, mode, id)
-    #make = lambda mode, id: make_env(config, mode, id)
-    # Create training and evaluation environments for each configured environment instance.
-    #train_envs = [make("train", i) for i in range(config.envs)]
-    # If configured for parallel execution, wrap environments for parallel processing; otherwise, use a dummy wrapper.
-    if config.parallel:
-        train_envs = [Parallel(env, "process") for env in train_envs]
-    else:
-        #train_envs = Damy(train_envs)
-        pass
-    
+    acts = Box(-1, 1, (train_envs.num_envs, 4), 'float32')# Box(-1.0, 1.0, (train_envs.m545_measurements.num_dofs,), 'float32')
     # Determine the action space from the first training environment and log it.
-    from gym.spaces import Box
-    acts = Box(-1.0, 1.0, (train_envs.m545_measurements.num_dofs,), 'float32') #train_envs.action_space
     print("Action Space", acts)
     # Set the number of actions in the configuration based on the determined action space.
-    config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
+    config.num_actions = acts.shape[1]
 
     # Initialize the state for potentially pre-filling the replay buffer.
     state = None
@@ -378,8 +303,8 @@ def main(config):
         else:
             random_actor = torchd.independent.Independent(
                 torchd.uniform.Uniform(
-                    torch.Tensor(acts.low).repeat(config.envs, 1),
-                    torch.Tensor(acts.high).repeat(config.envs, 1),
+                    torch.Tensor(acts.low),#.repeat(config.envs, 1),
+                    torch.Tensor(acts.high),#.repeat(config.envs, 1),
                 ),
                 1,
             )
@@ -388,7 +313,33 @@ def main(config):
             action = random_actor.sample()
             logprob = random_actor.log_prob(action)
             return {"action": action, "logprob": logprob}, None
+
+        # Define a zero agent that provides 0 actions
+        def zero_agent(o, d, s):
+            action = torch.zeros([train_envs.num_envs,train_envs.m545_measurements.num_dofs])
+            logprob = torch.zeros([train_envs.num_envs])
+            return {"action": action, "logprob": logprob}, None
         
+        
+        # Define a pretrained agent using PPO to learn the world model better
+        def pretrained_agent(o, d, s):
+            agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+            # specify directory for logging experiments
+            log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+            log_root_path = os.path.abspath(log_root_path)
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            # load previously trained model
+            ppo_runner = OnPolicyRunner(train_envs, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+            ppo_runner.load(resume_path)
+            policy = ppo_runner.get_inference_policy(device=train_envs.unwrapped.device)
+            action = policy(o)
+            logprob = random_actor.log_prob(action)
+            
+            return {"action": action, "logprob": logprob}, None
+        
+
+
+
         # Simulate the random agent in the training environments to pre-fill the dataset, logging progress.
         state = tools.simulate(
             random_agent,
@@ -408,14 +359,15 @@ def main(config):
     # Create training and evaluation datasets from loaded episodes.
     train_dataset = make_dataset(train_eps, config)
 
+    train_eps
+
     # Initialize the Dreamer agent with the specified configurations and datasets.
     agent = Dreamer(
-        train_envs.observation_space,
-        train_envs.action_space,
+        train_envs,
         config,
         logger,
         train_dataset,
-    ).to(config.device)
+    ).to(train_envs.device)
     # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
@@ -431,6 +383,7 @@ def main(config):
     while agent._step < config.steps + config.eval_every:
         logger.write()
         # If the configuration specifies evaluation episodes, proceed with evaluation.
+        print("Agent step in outside loop:", agent._step)
 
         print("Start training.")
         # Simulate the agent in training mode, updating its parameters based on interactions with the environment.
@@ -455,8 +408,22 @@ def main(config):
 if __name__ == "__main__":
     try:
         # Bypass all the args parsing
+        import yaml
         from argparse import Namespace
-        args_main = Namespace(act='SiLU', action_repeat=2, actor={'layers': 2, 'dist': 'normal', 'entropy': 0.0003, 'unimix_ratio': 0.01, 'std': 'learned', 'min_std': 0.1, 'max_std': 1.0, 'temp': 0.1, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 1.0}, batch_length=64, batch_size=16, compile=True, cont_head={'layers': 2, 'loss_scale': 1.0, 'outscale': 1.0}, critic={'layers': 2, 'dist': 'symlog_disc', 'slow_target': True, 'slow_target_update': 1, 'slow_target_fraction': 0.02, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 0.0}, dataset_size=1000000, debug=False, decoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'cnn_sigmoid': False, 'image_dist': 'mse', 'vector_dist': 'symlog_mse', 'outscale': 1.0}, deterministic_run=False, device='cuda:0', disag_action_cond=False, disag_layers=4, disag_log=True, disag_models=10, disag_offset=1, disag_target='stoch', disag_units=400, discount=0.997, discount_lambda=0.95, dyn_deter=512, dyn_discrete=32, dyn_hidden=512, dyn_mean_act='none', dyn_min_std=0.1, dyn_rec_depth=1, dyn_scale=0.5, dyn_std_act='sigmoid2', dyn_stoch=32, encoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'symlog_inputs': True}, envs=4, eval_episode_num=10, eval_every=10000.0, eval_state_mean=False, evaldir=None, expl_behavior='greedy', expl_extr_scale=0.0, expl_intr_scale=1.0, expl_until=0, grad_clip=1000, grad_heads=('decoder', 'reward', 'cont'), grayscale=False, imag_gradient='dynamics', imag_gradient_mix=0.0, imag_horizon=15, initial='learned', kl_free=1.0, log_every=10000.0, logdir='./logdir/dmc_walker_walk', model_lr=0.0001, norm=True, offline_evaldir='', offline_traindir='', opt='adam', opt_eps=1e-08, parallel=False, precision=32, prefill=2500, pretrain=100, rep_scale=0.1, reset_every=0, reward_EMA=True, reward_head={'layers': 2, 'dist': 'symlog_disc', 'loss_scale': 1.0, 'outscale': 0.0}, seed=0, size=(64, 64), steps=500000.0, task='dmc_walker_walk', time_limit=1000, train_ratio=512, traindir=None, unimix_ratio=0.01, units=512, video_pred_log=False, weight_decay=0.0)
+        # Function to convert a nested dictionary into a Namespace
+        def dict_to_namespace(d):
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    d[key] = dict_to_namespace(value)
+            return Namespace(**d)
+
+        # Load the YAML file
+        with open('configs.yaml', 'r') as file:
+            parameters = yaml.safe_load(file)
+
+        # Convert the dictionary to a Namespace object
+        args_main = dict_to_namespace(parameters)
+        #args_main = Namespace(act='SiLU', action_repeat=2, actor={'layers': 2, 'dist': 'normal', 'entropy': 0.0003, 'unimix_ratio': 0.01, 'std': 'learned', 'min_std': 0.1, 'max_std': 1.0, 'temp': 0.1, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 1.0}, batch_length=64, batch_size=16, compile=True, cont_head={'layers': 2, 'loss_scale': 1.0, 'outscale': 1.0}, critic={'layers': 2, 'dist': 'symlog_disc', 'slow_target': True, 'slow_target_update': 1, 'slow_target_fraction': 0.02, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 0.0}, dataset_size=1000000, debug=False, decoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'cnn_sigmoid': False, 'image_dist': 'mse', 'vector_dist': 'symlog_mse', 'outscale': 1.0}, deterministic_run=False, device='cuda:0', disag_action_cond=False, disag_layers=4, disag_log=True, disag_models=10, disag_offset=1, disag_target='stoch', disag_units=400, discount=0.997, discount_lambda=0.95, dyn_deter=512, dyn_discrete=32, dyn_hidden=512, dyn_mean_act='none', dyn_min_std=0.1, dyn_rec_depth=1, dyn_scale=0.5, dyn_std_act='sigmoid2', dyn_stoch=32, encoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'symlog_inputs': True}, eval_episode_num=10, eval_every=10000.0, eval_state_mean=False, evaldir=None, expl_behavior='greedy', expl_extr_scale=0.0, expl_intr_scale=1.0, expl_until=0, grad_clip=1000, grad_heads=('decoder', 'reward', 'cont'), grayscale=False, imag_gradient='dynamics', imag_gradient_mix=0.0, imag_horizon=15, initial='learned', kl_free=1.0, log_every=10000.0, logdir='./logdir/dmc_walker_walk', model_lr=0.0001, norm=True, offline_evaldir='', offline_traindir='', opt='adam', opt_eps=1e-08, parallel=False, precision=32, prefill=2500, pretrain=100, rep_scale=0.1, reset_every=0, reward_EMA=True, reward_head={'layers': 2, 'dist': 'symlog_disc', 'loss_scale': 1.0, 'outscale': 0.0}, seed=0, size=(64, 64), steps=500000.0, task='dmc_walker_walk', time_limit=1000, train_ratio=512, traindir=None, unimix_ratio=0.01, units=512, video_pred_log=False, weight_decay=0.0)
 
         main(args_main)
     except Exception as err:
