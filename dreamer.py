@@ -210,6 +210,27 @@ def make_dataset(episodes, config):
 
 
 
+def make_envs_dmc(config):
+    def make_1_env_dmc(config):
+        suite, task = config.task.split("_", 1)
+        import envs.dmc as dmc
+        env = dmc.DeepMindControl(
+            task, config.action_repeat, config.size, seed=config.seed + id
+        )
+        env = wrappers.NormalizeActions(env)
+
+        env = wrappers.TimeLimit(env, config.time_limit)
+        #env = wrappers.SelectAction(env, key="action")
+        #env = wrappers.UUID(env) 
+
+        return env
+    
+    make = lambda mode, id: make_1_env_dmc(config, mode, id)
+    envs = [make("train", i) for i in range(args_cli.num_envs)]
+
+    envs = wrappers.LikeOrbitNumpyDMC(envs)
+
+    return envs
 
 
 #----- ORBIT-Start

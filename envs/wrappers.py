@@ -47,6 +47,40 @@ class NormalizeActions(gym.Wrapper):
         original = np.where(self._mask, original, action)
         return self.env.step(original)
 
+class LikeOrbitNumpyDMC():
+
+    def __init__(self, env):
+        """
+            Receives a collection of environment
+        """
+        # Identify each env uniquely
+        self.unique_indices = []
+        for i in range(len(env)):
+            timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+            id = f"{timestamp}-{str(uuid.uuid4().hex)}"
+            self.unique_indices.append(id)
+
+        self.envs = env
+        self.num_envs = len(env)
+
+    def step(self, action):
+        results = [e.step(a) for e, a in zip(self.envs, action)]
+        obs, reward, done,infos = zip(*[p[:4] for p in results])
+        return obs, reward, done, infos 
+    
+    def reset(self):
+        for i in range(len(self.num_envs)):
+            self.envs[i].reset()
+        
+    def reset_idx(self, indices):
+        obs = [self.envs[i].reset() for i in indices] # Reset and get initial observations.
+        obs = [r() for r in obs] # Assume these are async calls, so we get the results.
+        # We need the full set of obs here
+        for ids in indices:
+            obs[ids]['is_first'] = True
+            obs[ids]['is_terminal'] = False
+        return obs
+
 
 class OrbitNumpy(gym.Wrapper):
     def __init__(self, env):
@@ -58,6 +92,8 @@ class OrbitNumpy(gym.Wrapper):
             timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
             id = f"{timestamp}-{str(uuid.uuid4().hex)}"
             self.unique_indices.append(id)
+
+        
 
 
     def step(self, action):
@@ -110,6 +146,40 @@ class OrbitNumpy(gym.Wrapper):
             self.unique_indices.append(id)
 
         return obs_dict
+    
+    def reset_idx(self, indices):
+        '''
+            Reset env for given indices and return obs in dreamer format
+        '''
+        reset_env_ids = self.env.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(reset_env_ids) > 0:
+            self.env.unwrapped.reset_idx(reset_env_ids)
+
+        # Update derived measurements for resetted envs
+        self.env.update_derived_measurements(reset_env_ids)
+        # Update the obs at first, gives full set of obs
+        self.env.obs_buf = self.env.unwrapped.observation_manager.compute()
+        self.env.last_actions[reset_env_ids] = 0
+
+        obs_dreamer = [
+            {obs_key:  self.env.obs_buf[obs_key][env_idx].cpu().numpy() for obs_key in  self.env.obs_buf} # only key is policy anyway
+            for env_idx in range(self.env.num_envs)
+        ]
+
+        # complete the obs with is_first and is_terminal
+        for ids in range(self.env.num_envs): # TODO: Remove when DMC comissioned
+            # Cache Resetted state and ger
+            if ids in indices:
+                # Adapt obs of new resetted env
+                obs_dreamer[ids]['is_first'] = True
+                obs_dreamer[ids]['is_terminal'] = False
+                # Give the resetted env a new unique index
+            else:
+                # Adapt obs for not resetted env since is_first and is_terminal have been remobved in envs.unwrapped.observation_manager.compute()
+                obs_dreamer[ids]['is_first'] = False
+                obs_dreamer[ids]['is_terminal'] = False
+
+        return obs_dreamer
 
 class OneHotAction(gym.Wrapper):
     def __init__(self, env):

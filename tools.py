@@ -159,31 +159,13 @@ def simulate(
             #results = [r() for r in results] # Assume these are async calls, return the obs
             
             #--- ORBIT: Reset terminated envs
-            indices = np.nonzero(done) #torch: indices = done.nonzero()
-            # reset the envs that need to be resetted
-            reset_env_ids = envs.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-            if len(reset_env_ids) > 0:
-                envs.unwrapped.reset_idx(reset_env_ids)
-
-            # Update derived measurements for resetted envs
-            envs.unwrapped.update_derived_measurements(reset_env_ids)
-            # Update the obs at first 
-            envs.obs_buf = envs.unwrapped.observation_manager.compute()
-            envs.unwrapped.last_actions[reset_env_ids] = 0
-            # Rewards have already been updated
-            #rew_np = to_np(envs.reward_manager.compute(dt=envs.step_dt)) # reward have benn calculated in step,
-
-            # Convert obs to the dreamer format
-            # Here: For all the envs, 
-            obs_dreamer = [
-                {obs_key: envs.obs_buf[obs_key][env_idx].cpu().numpy() for obs_key in envs.obs_buf} # only key is policy anyway
-                for env_idx in range(envs.num_envs)
-            ]
+            indices = np.nonzero(done)
+            obs_dreamer = envs.reset_idx(indices)
         
             # If we add is_first and is_terminal to the orbit obs then we would just need to loop through reset_env_ids
-            for ids in range(envs.num_envs):
+            '''for ids in range(envs.num_envs): # TODO: Reput it like this when DMC comissioned
                 # Cache Resetted state and ger
-                if ids in reset_env_ids:
+                if ids in indices:
                     # Adapt obs of new resetted env
                     obs_dreamer[ids]['is_first'] = True
                     obs_dreamer[ids]['is_terminal'] = False
@@ -195,13 +177,29 @@ def simulate(
                     transition = obs_dreamer[ids].copy()
                     transition = {k: convert(v) for k, v in transition.items()}
                     transition['reward'] = 0
+                    transition["discount"] = 1.0
                     # t["discount"] = 1.0 Put it or not ?
                     # Cache the transition
                     add_to_cache(cache, envs.unique_indices[ids], transition)
                 else:
                     # Adapt obs for not resetted env since is_first and is_terminal have been remobved in envs.unwrapped.observation_manager.compute()
                     obs_dreamer[ids]['is_first'] = False
-                    obs_dreamer[ids]['is_terminal'] = False
+                    obs_dreamer[ids]['is_terminal'] = False'''
+            
+            for ids in indices:
+                # Give the resetted env a new unique index
+                timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+                id = f"{timestamp}-{str(uuid.uuid4().hex)}"
+                envs.unique_indices[ids] = id
+                # Define the transition
+                transition = obs_dreamer[ids].copy()
+                transition = {k: convert(v) for k, v in transition.items()}
+                transition['reward'] = 0
+                transition["discount"] = 1.0
+                # t["discount"] = 1.0 Put it or not ?
+                # Cache the transition
+                add_to_cache(cache, envs.unique_indices[ids], transition)
+
 
         # step agents
         # Prepare observations for the agent, put it back in orbit Format haha
@@ -254,6 +252,7 @@ def simulate(
             transition = o.copy()
             transition["action"] =  to_np(action['action'])[0]
             transition["reward"] = r
+            transition["discount"] = extras.get("discount", np.array(1 - float(d)))
             # Did not put discout otherwise transition["discount"] = 1
             add_to_cache(cache, envs.unique_indices[i], transition)
         
