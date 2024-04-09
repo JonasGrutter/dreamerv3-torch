@@ -24,12 +24,14 @@ from torch import distributions as torchd
 
 
 #----- ORBIT-Start
-ORBIT = False
+
 import argparse
 import os
 import traceback
-import carb
 from omni.isaac.orbit.app import AppLauncher
+from datetime import datetime
+import carb
+
 
 # local imports
 import cli_args  # i
@@ -48,10 +50,27 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 2
+args_cli.num_envs = 1000
 args_cli.task='Isaac-m545-v0'
+EXCAVATION = False
 
-if ORBIT:
+if EXCAVATION:
+    # launch omniverse app
+    app_launcher = AppLauncher(args_cli)
+    simulation_app = app_launcher.app
+
+    import gymnasium as gym
+    from omni.isaac.orbit.envs import RLTaskEnvCfg
+    import omni.isaac.contrib_tasks  # noqa: F401
+    import omni.isaac.orbit_tasks  # noqa: F401
+    from omni.isaac.orbit_tasks.utils import get_checkpoint_path, parse_env_cfg
+    from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+
+
+
+# For Pre training
+from rsl_rl.runners import OnPolicyRunner
+'''if ORBIT:
     # launch omniverse app
     app_launcher = AppLauncher(args_cli)
     simulation_app = app_launcher.app
@@ -66,7 +85,7 @@ if ORBIT:
     args_cli.task = 'Isaac-m545-v0'
 
     # For Pre training
-    from rsl_rl.runners import OnPolicyRunner
+    from rsl_rl.runners import OnPolicyRunner'''
 
 
 
@@ -80,11 +99,11 @@ class Dreamer(nn.Module):
         super(Dreamer, self).__init__()
         # Environment storing       
         self.envs = envs
-        if ORBIT:
+        if EXCAVATION:
             self.act_space = Box(-1, 1, (self.envs.num_envs, 4), 'float32')
             self.obs_space = self.envs.observation_space
         else:
-            self.act_space = Box([-1., -1., -1., -1., -1., -1.], [1., 1., 1., 1., 1., 1.], (6,), 'float32')
+            self.act_space =  self.envs.envs[0].action_space
             self.obs_space = self.envs.envs[0].observation_space
         # Store the configuration settings, logger, and dataset for use within the class.
         self._config = config
@@ -232,8 +251,11 @@ def make_envs_dmc(config):
     
     make = lambda id: make_1_env_dmc(config, id)
     envs = [make(i) for i in range(args_cli.num_envs)]
+    
+    envs = [Damy(env) for env in envs]
 
     envs = wrappers.LikeOrbitNumpyDMC(envs)
+
 
     return envs
 
@@ -310,13 +332,12 @@ def main(config):
         directory = config.evaldir
 
     # -- Orbit
-    if ORBIT:
+    if EXCAVATION:
         train_envs = make_env_orbit()
         acts = Box(-1, 1, (train_envs.num_envs, 4), 'float32')
     else:
         train_envs = make_envs_dmc(config)
-        train_envs.envs[0].action_space
-        acts = Box([-1., -1., -1., -1., -1., -1.], [1., 1., 1., 1., 1., 1.], (6,), 'float32')
+        acts = train_envs.envs[0].action_space
 
     # Reset
     train_envs.reset()
@@ -325,8 +346,10 @@ def main(config):
     # Determine the action space from the first training environment and log it.
     print("Action Space", acts)
     # Set the number of actions in the configuration based on the determined action space.
-    config.num_actions = acts.shape[1]
-
+    if EXCAVATION:
+        config.num_actions = acts.shape[1]
+    else:
+        config.num_actions = acts.shape[0]
     # Initialize the state for potentially pre-filling the replay buffer.
     state = None
     # If not using an offline training directory, calculate how much pre-filling is needed based on existing data.
@@ -456,9 +479,12 @@ if __name__ == "__main__":
             return Namespace(**d)
 
         # Load the YAML file
-        with open('configs.yaml', 'r') as file:
-            parameters = yaml.safe_load(file)
-
+        if EXCAVATION:
+            with open('configs.yaml', 'r') as file:
+                parameters = yaml.safe_load(file)
+        else:
+            with open('configs_dmc_proprio.yaml', 'r') as file:
+                parameters = yaml.safe_load(file)
         # Convert the dictionary to a Namespace object
         args_main = dict_to_namespace(parameters)
         #args_main = Namespace(act='SiLU', action_repeat=2, actor={'layers': 2, 'dist': 'normal', 'entropy': 0.0003, 'unimix_ratio': 0.01, 'std': 'learned', 'min_std': 0.1, 'max_std': 1.0, 'temp': 0.1, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 1.0}, batch_length=64, batch_size=16, compile=True, cont_head={'layers': 2, 'loss_scale': 1.0, 'outscale': 1.0}, critic={'layers': 2, 'dist': 'symlog_disc', 'slow_target': True, 'slow_target_update': 1, 'slow_target_fraction': 0.02, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 0.0}, dataset_size=1000000, debug=False, decoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'cnn_sigmoid': False, 'image_dist': 'mse', 'vector_dist': 'symlog_mse', 'outscale': 1.0}, deterministic_run=False, device='cuda:0', disag_action_cond=False, disag_layers=4, disag_log=True, disag_models=10, disag_offset=1, disag_target='stoch', disag_units=400, discount=0.997, discount_lambda=0.95, dyn_deter=512, dyn_discrete=32, dyn_hidden=512, dyn_mean_act='none', dyn_min_std=0.1, dyn_rec_depth=1, dyn_scale=0.5, dyn_std_act='sigmoid2', dyn_stoch=32, encoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'symlog_inputs': True}, eval_episode_num=10, eval_every=10000.0, eval_state_mean=False, evaldir=None, expl_behavior='greedy', expl_extr_scale=0.0, expl_intr_scale=1.0, expl_until=0, grad_clip=1000, grad_heads=('decoder', 'reward', 'cont'), grayscale=False, imag_gradient='dynamics', imag_gradient_mix=0.0, imag_horizon=15, initial='learned', kl_free=1.0, log_every=10000.0, logdir='./logdir/dmc_walker_walk', model_lr=0.0001, norm=True, offline_evaldir='', offline_traindir='', opt='adam', opt_eps=1e-08, parallel=False, precision=32, prefill=2500, pretrain=100, rep_scale=0.1, reset_every=0, reward_EMA=True, reward_head={'layers': 2, 'dist': 'symlog_disc', 'loss_scale': 1.0, 'outscale': 0.0}, seed=0, size=(64, 64), steps=500000.0, task='dmc_walker_walk', time_limit=1000, train_ratio=512, traindir=None, unimix_ratio=0.01, units=512, video_pred_log=False, weight_decay=0.0)
@@ -469,6 +495,6 @@ if __name__ == "__main__":
         carb.log_error(traceback.format_exc())
         raise
     finally:
-        if ORBIT:
-            # close sim app
+        # close sim app
+        if EXCAVATION:
             simulation_app.close()

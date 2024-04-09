@@ -65,11 +65,12 @@ class LikeOrbitNumpyDMC():
 
     def step(self, action):
         results = [e.step(a) for e, a in zip(self.envs, action)]
+        results = [r() for r in results]
         obs, reward, done,infos = zip(*[p[:4] for p in results])
         return obs, reward, done, infos 
     
     def reset(self):
-        for i in range(len(self.num_envs)):
+        for i in range(self.num_envs):
             self.envs[i].reset()
         
     def reset_idx(self, indices):

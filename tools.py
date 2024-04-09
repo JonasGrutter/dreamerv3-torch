@@ -151,7 +151,7 @@ def simulate(
         step, episode, done, length, obs_dreamer, agent_state, reward = state
 
     # Main simulation loop.
-    while (steps and step < steps): # or (episodes and episode < episodes)
+    while (steps and step < steps)or (episodes and episode < episodes):
         # Reset environments that are done.
         if done.any():
             #indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.
@@ -235,6 +235,7 @@ def simulate(
         # Log
         obs = list(obs_dreamer)
         reward = list(rew_np)
+        extras = list(extras)
         done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
@@ -252,7 +253,10 @@ def simulate(
             transition = o.copy()
             transition["action"] =  to_np(action['action'])[0]
             transition["reward"] = r
-            transition["discount"] = extras.get("discount", np.array(1 - float(d)))
+            if "discount" not in extras:
+                transition["discount"] = 1
+            else:
+                transition["discount"] = extras[i].get("discount", np.array(1 - float(d)))
             # Did not put discout otherwise transition["discount"] = 1
             add_to_cache(cache, envs.unique_indices[i], transition)
         
