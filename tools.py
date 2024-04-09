@@ -159,7 +159,7 @@ def simulate(
             #results = [r() for r in results] # Assume these are async calls, return the obs
             
             #--- ORBIT: Reset terminated envs
-            indices = np.nonzero(done)
+            indices = np.nonzero(done)[0]
             obs_dreamer = envs.reset_idx(indices)
         
             # If we add is_first and is_terminal to the orbit obs then we would just need to loop through reset_env_ids

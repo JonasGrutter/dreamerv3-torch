@@ -24,10 +24,11 @@ from torch import distributions as torchd
 
 
 #----- ORBIT-Start
-
+ORBIT = False
 import argparse
 import os
 import traceback
+import carb
 from omni.isaac.orbit.app import AppLauncher
 
 # local imports
@@ -49,24 +50,23 @@ args_cli = parser.parse_args()
 args_cli.headless = True
 args_cli.num_envs = 2
 args_cli.task='Isaac-m545-v0'
-ORBIT = False
 
-# launch omniverse app
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+if ORBIT:
+    # launch omniverse app
+    app_launcher = AppLauncher(args_cli)
+    simulation_app = app_launcher.app
 
-from datetime import datetime
-import gymnasium as gym
-from omni.isaac.orbit.envs import RLTaskEnvCfg
-import omni.isaac.contrib_tasks  # noqa: F401
-import omni.isaac.orbit_tasks  # noqa: F401
-from omni.isaac.orbit_tasks.utils import get_checkpoint_path, parse_env_cfg
-from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-import carb
-args_cli.task = 'Isaac-m545-v0'
+    from datetime import datetime
+    import gymnasium as gym
+    from omni.isaac.orbit.envs import RLTaskEnvCfg
+    import omni.isaac.contrib_tasks  # noqa: F401
+    import omni.isaac.orbit_tasks  # noqa: F401
+    from omni.isaac.orbit_tasks.utils import get_checkpoint_path, parse_env_cfg
+    from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+    args_cli.task = 'Isaac-m545-v0'
 
-# For Pre training
-from rsl_rl.runners import OnPolicyRunner
+    # For Pre training
+    from rsl_rl.runners import OnPolicyRunner
 
 
 
@@ -80,7 +80,12 @@ class Dreamer(nn.Module):
         super(Dreamer, self).__init__()
         # Environment storing       
         self.envs = envs
-        self.act_space = Box(-1, 1, (self.envs.num_envs, 4), 'float32')
+        if ORBIT:
+            self.act_space = Box(-1, 1, (self.envs.num_envs, 4), 'float32')
+            self.obs_space = self.envs.observation_space
+        else:
+            self.act_space = Box([-1., -1., -1., -1., -1., -1.], [1., 1., 1., 1., 1., 1.], (6,), 'float32')
+            self.obs_space = self.envs.envs[0].observation_space
         # Store the configuration settings, logger, and dataset for use within the class.
         self._config = config
         self._logger = logger
@@ -99,7 +104,7 @@ class Dreamer(nn.Module):
         self._update_count = 0
         self._dataset = dataset
         # Initialize the world model with the observation space, action space, current step, and configuration.
-        self._wm = models.WorldModel(self.envs.observation_space, self.act_space, self._step, config)
+        self._wm = models.WorldModel(self.obs_space, self.act_space, self._step, config)
         # Initialize the behavior model for task-specific actions using the world model.
         self._task_behavior = models.ImagBehavior(config, self._wm)
         if (
@@ -211,7 +216,7 @@ def make_dataset(episodes, config):
 
 
 def make_envs_dmc(config):
-    def make_1_env_dmc(config):
+    def make_1_env_dmc(config, id):
         suite, task = config.task.split("_", 1)
         import envs.dmc as dmc
         env = dmc.DeepMindControl(
@@ -225,8 +230,8 @@ def make_envs_dmc(config):
 
         return env
     
-    make = lambda mode, id: make_1_env_dmc(config, mode, id)
-    envs = [make("train", i) for i in range(args_cli.num_envs)]
+    make = lambda id: make_1_env_dmc(config, id)
+    envs = [make(i) for i in range(args_cli.num_envs)]
 
     envs = wrappers.LikeOrbitNumpyDMC(envs)
 
@@ -303,11 +308,20 @@ def main(config):
         directory = config.offline_evaldir.format(**vars(config))
     else:
         directory = config.evaldir
-        # -- Orbit
-    train_envs = make_env_orbit()
+
+    # -- Orbit
+    if ORBIT:
+        train_envs = make_env_orbit()
+        acts = Box(-1, 1, (train_envs.num_envs, 4), 'float32')
+    else:
+        train_envs = make_envs_dmc(config)
+        train_envs.envs[0].action_space
+        acts = Box([-1., -1., -1., -1., -1., -1.], [1., 1., 1., 1., 1., 1.], (6,), 'float32')
+
+    # Reset
     train_envs.reset()
     # -- Orbit
-    acts = Box(-1, 1, (train_envs.num_envs, 4), 'float32')# Box(-1.0, 1.0, (train_envs.m545_measurements.num_dofs,), 'float32')
+   # Box(-1.0, 1.0, (train_envs.m545_measurements.num_dofs,), 'float32')
     # Determine the action space from the first training environment and log it.
     print("Action Space", acts)
     # Set the number of actions in the configuration based on the determined action space.
@@ -455,5 +469,6 @@ if __name__ == "__main__":
         carb.log_error(traceback.format_exc())
         raise
     finally:
-        # close sim app
-        simulation_app.close()
+        if ORBIT:
+            # close sim app
+            simulation_app.close()
