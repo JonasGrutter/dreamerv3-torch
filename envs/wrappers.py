@@ -64,6 +64,19 @@ class LikeOrbitNumpyDMC():
         self.num_envs = len(env)
 
     def step(self, action):
+
+        # Pre process
+        if isinstance(action, dict):
+            # Convert actions to the appropriate format for each environment
+            action = [
+                {k: np.array(action[k][i].detach().cpu()) for k in action}
+                for i in range(self.num_envs)
+            ]
+        else:
+            action = np.array(action)
+        assert len(action) == self.num_envs
+
+        # Apply
         results = [e.step(a) for e, a in zip(self.envs, action)]
         results = [r() for r in results]
         obs, reward, done,infos = zip(*[p[:4] for p in results])
@@ -78,15 +91,15 @@ class LikeOrbitNumpyDMC():
         obs = [r() for r in obs] # Assume these are async calls, so we get the results.
         # We need the full set of obs here
         for ids in indices:
-            obs[ids]['is_first'] = True
             obs[ids]['is_terminal'] = False
+            obs[ids]['is_first'] = True
         return obs
 
 
 class OrbitNumpy(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
-
+        self.num_envs = env.num_envs
         # Identify each env uniquely
         self.unique_indices = []
         for i in range(env.unwrapped.num_envs):
@@ -98,8 +111,10 @@ class OrbitNumpy(gym.Wrapper):
 
 
     def step(self, action):
-        # Transform Action to torch tensor
-        action_torch = action.clone().detach().to(self.env.unwrapped.device)
+        
+        # Transform Action to torch tensor and put it on the right device
+        action_torch = action['action'].clone().detach().to(self.env.unwrapped.device)
+        assert action_torch.shape[0] == self.num_envs
         # Orbit Env Stepping
         obs_dict, rew, terminated, truncated, extras = self.env.step(action_torch)
         # rew: torch tensor, terminated: torch tensor, extras['log']: float but extras 

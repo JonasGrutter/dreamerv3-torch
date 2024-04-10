@@ -31,6 +31,7 @@ import traceback
 from omni.isaac.orbit.app import AppLauncher
 from datetime import datetime
 import carb
+from utils.wandbutils import WandbSummaryWriter
 
 
 # local imports
@@ -50,9 +51,11 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 1000
-args_cli.task='Isaac-m545-v0'
-EXCAVATION = False
+args_cli.num_envs = 10
+args_cli.task= 'Isaac-m545-v0'
+EXCAVATION = True
+
+LOGGER_TYPE = "Tensorboard" # "Wandb"
 
 if EXCAVATION:
     # launch omniverse app
@@ -100,7 +103,7 @@ class Dreamer(nn.Module):
         # Environment storing       
         self.envs = envs
         if EXCAVATION:
-            self.act_space = Box(-1, 1, (self.envs.num_envs, 4), 'float32')
+            self.act_space = Box(-1, 1, (self.envs.num_envs, self.envs.m545_measurements.num_dofs), 'float32')
             self.obs_space = self.envs.observation_space
         else:
             self.act_space =  self.envs.envs[0].action_space
@@ -144,7 +147,7 @@ class Dreamer(nn.Module):
         #print('call function called')
         step = self._step
         if training:
-            print('training')
+            #print('training')
             steps = (
                 self._config.pretrain
                 if self._should_pretrain()
@@ -239,12 +242,12 @@ def make_envs_dmc(config):
         suite, task = config.task.split("_", 1)
         import envs.dmc as dmc
         env = dmc.DeepMindControl(
-            task, config.action_repeat, config.size, seed=config.seed + id
+            task, config.action_repeat, tuple(config.size), seed=config.seed + id
         )
         env = wrappers.NormalizeActions(env)
 
         env = wrappers.TimeLimit(env, config.time_limit)
-        #env = wrappers.SelectAction(env, key="action")
+        env = wrappers.SelectAction(env, key="action")
         #env = wrappers.UUID(env) 
 
         return env
@@ -269,7 +272,7 @@ def make_env_orbit():
 
 
     # Override env cfg
-    env_cfg.reset.only_above_soil = True
+    env_cfg.reset.only_above_soil = False
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -286,7 +289,7 @@ def make_env_orbit():
     env = wrappers.OrbitNumpy(env)
 
 
-    return env
+    return env, env_cfg
 
     #----- ORBIT-End
 
@@ -315,8 +318,9 @@ def main(config):
     config.evaldir.mkdir(parents=True, exist_ok=True)
     # Count the steps already present in the training directory to resume training appropriately.
     step = count_steps(config.traindir)
-    # step in logger is environmental step
-    logger = tools.Logger(logdir, config.action_repeat * step)
+
+
+
     # Load episodes for training and evaluation, potentially from specified offline directories.
     print("Create envs.")
     # Determine the directory for loading training episodes, favoring an offline directory if specified.
@@ -326,18 +330,20 @@ def main(config):
         directory = config.traindir
     # Load training episodes from the specified directory, up to the configured dataset size limit.
     train_eps = tools.load_episodes(directory, limit=config.dataset_size)
-    if config.offline_evaldir:
-        directory = config.offline_evaldir.format(**vars(config))
-    else:
-        directory = config.evaldir
 
     # -- Orbit
     if EXCAVATION:
-        train_envs = make_env_orbit()
-        acts = Box(-1, 1, (train_envs.num_envs, 4), 'float32')
+        train_envs, train_envs_cfg = make_env_orbit()
+        acts = Box(-1, 1, (train_envs.num_envs, train_envs.m545_measurements.num_dofs), 'float32')
     else:
         train_envs = make_envs_dmc(config)
         acts = train_envs.envs[0].action_space
+    logger = tools.Logger(logdir, config.action_repeat * step)
+
+
+
+    #wandb_logger = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=config)
+    #wandb_logger.log_config(train_envs_cfg, config, None, None)
 
     # Reset
     train_envs.reset()
@@ -362,13 +368,22 @@ def main(config):
                 torch.zeros(config.num_actions).repeat(config.envs, 1)
             )
         else:
-            random_actor = torchd.independent.Independent(
-                torchd.uniform.Uniform(
-                    torch.Tensor(acts.low),#.repeat(config.envs, 1),
-                    torch.Tensor(acts.high),#.repeat(config.envs, 1),
-                ),
-                1,
-            )
+            if EXCAVATION:
+                random_actor = torchd.independent.Independent(
+                    torchd.uniform.Uniform(
+                        torch.Tensor(acts.low),#.repeat(config.envs, 1),
+                        torch.Tensor(acts.high),#.repeat(config.envs, 1),
+                    ),
+                    1,
+                )
+            else:
+                random_actor = torchd.independent.Independent(
+                    torchd.uniform.Uniform(
+                        torch.Tensor(acts.low).repeat(config.envs, 1),
+                        torch.Tensor(acts.high).repeat(config.envs, 1),
+                    ),
+                    1,
+                )
         # Define a random agent that samples actions uniformly and calculates their log probability.
         def random_agent(o, d, s):
             action = random_actor.sample()
@@ -428,7 +443,7 @@ def main(config):
         config,
         logger,
         train_dataset,
-    ).to(train_envs.device)
+    ).to(config.device)
     # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
@@ -444,7 +459,7 @@ def main(config):
     while agent._step < config.steps + config.eval_every:
         logger.write()
         # If the configuration specifies evaluation episodes, proceed with evaluation.
-        print("Agent step in outside loop:", agent._step)
+        print("Agent step in outside loop:", agent._step, "/", config.steps+config.eval_every)
 
         print("Start training.")
         # Simulate the agent in training mode, updating its parameters based on interactions with the environment.

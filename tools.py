@@ -194,7 +194,7 @@ def simulate(
                 # Define the transition
                 transition = obs_dreamer[ids].copy()
                 transition = {k: convert(v) for k, v in transition.items()}
-                transition['reward'] = 0
+                transition['reward'] = 0.0
                 transition["discount"] = 1.0
                 # t["discount"] = 1.0 Put it or not ?
                 # Cache the transition
@@ -224,18 +224,23 @@ def simulate(
         #obs, reward, done = zip(*[p[:3] for p in results])
 
         # due to the wrapper the format of the obs, rew, done is already dreamer format
-        obs_dreamer, rew_np, done_np, extras = envs.step(action['action'])
+        obs_dreamer, rew_np, done_np, extras = envs.step(action)
         # Add necessary obs to orbit
         # Iterate over each observation and the corresponding done flag
         for i in range(len(obs_dreamer)): #NOTE: Can be put in next loop if stuff in the middle useless
             # Add the 'is_terminal' key with the value of the done flag
-            obs_dreamer[i]['is_terminal'] = done_np[i]
+            obs_dreamer[i]['is_terminal'] = done_np[i] #for EXCAVATIOn, False otherwise
             obs_dreamer[i]['is_first'] = False
         
+        # bit sketchy but works: look if discount is a key, if not: excavation
+        excavation = True
+        if "discount" in extras:
+            excavation = False
+
         # Log
         obs = list(obs_dreamer)
         reward = list(rew_np)
-        extras = list(extras)
+        reward = list(extras)
         done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
@@ -251,10 +256,11 @@ def simulate(
             d = done_np[i]
             # Define the transition
             transition = o.copy()
-            transition["action"] =  to_np(action['action'])[0]
+            transition["action"] =  to_np(action['action'])[i]
+            transition["logprob"] = to_np(action['logprob'])[i]
             transition["reward"] = r
-            if "discount" not in extras:
-                transition["discount"] = 1
+            if excavation:
+                transition["discount"] = 1.0
             else:
                 transition["discount"] = extras[i].get("discount", np.array(1 - float(d)))
             # Did not put discout otherwise transition["discount"] = 1
@@ -265,8 +271,8 @@ def simulate(
             # logging for done episode
             for i in indices:
                 #save_episodes(directory, {envs[i].id: cache[envs[i].id]})
-                length = len(cache[envs.unique_indices[i]]["reward"]) - 1
-                score = float(np.array(cache[envs.unique_indices[i]]["reward"]).sum())
+                length = len(cache[envs.unique_indices[i]]["reward"]) - 1 # number of steps
+                score = float(np.array(cache[envs.unique_indices[i]]["reward"]).sum()) # 
                 #video = cache[envs[i].id]["image"]
                 # record logs given from environments
                 for key in list(cache[envs.unique_indices[i]].keys()):

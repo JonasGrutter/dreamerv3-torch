@@ -35,7 +35,11 @@ class WorldModel(nn.Module):
         self._use_amp = True if config.precision == 16 else False
         self._config = config
         # Preprocess observation space to get the shapes for encoder input.
-        shapes = {k: (v.shape[1],) for k, v in obs_space.spaces.items()} # Orbit: First dim is num_envs
+        if "height" in obs_space.spaces.keys():
+            shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        else: # check orbit or not
+            shapes = {k: (v.shape[1],) for k, v in obs_space.spaces.items()} # Orbit: First dim is num_envs
+            
         # Initialize the encoder to process observations into a lower-dimensional embedding.
         self.encoder = networks.MultiEncoder(shapes, **vars(config.encoder))
         # Output dimension of the encoder, used to size the input for other components.

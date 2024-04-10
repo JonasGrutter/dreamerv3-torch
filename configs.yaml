@@ -5,9 +5,9 @@ offline_traindir: ''
 offline_evaldir: ''
 seed: 0
 deterministic_run: False
-steps: !!float 1e6
+steps: !!float 5e5
 parallel: False
-eval_episode_num: 10
+eval_episode_num: 0
 log_every: !!float 1e4
 reset_every: 0
 device: 'cuda:0'
@@ -22,8 +22,8 @@ size: [64, 64]
 action_repeat: 2
 time_limit: 1000
 grayscale: False
-prefill: 30
-eval_every: !!float 30
+prefill: 10000
+eval_every: !!float 1e4
 reward_EMA: True
 
 # Model
