@@ -34,6 +34,8 @@ import carb
 from utils.wandbutils import WandbSummaryWriter
 
 
+from dreamer_class import Dreamer
+
 # local imports
 import cli_args  # i
 # add argparse arguments
@@ -51,7 +53,7 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 10
+args_cli.num_envs = 100
 args_cli.task= 'Isaac-m545-v0'
 EXCAVATION = True
 
@@ -94,137 +96,6 @@ from rsl_rl.runners import OnPolicyRunner
 
 #----- ORBIT-End
 
-to_np = lambda x: x.detach().cpu().numpy()
-
-# Dreamer class implements the Dreamer agent model, integrating a world model and behavior models for decision making.
-class Dreamer(nn.Module):
-    def __init__(self, envs, config, logger, dataset):
-        super(Dreamer, self).__init__()
-        # Environment storing       
-        self.envs = envs
-        if EXCAVATION:
-            self.act_space = Box(-1, 1, (self.envs.num_envs, self.envs.m545_measurements.num_dofs), 'float32')
-            self.obs_space = self.envs.observation_space
-        else:
-            self.act_space =  self.envs.envs[0].action_space
-            self.obs_space = self.envs.envs[0].observation_space
-        # Store the configuration settings, logger, and dataset for use within the class.
-        self._config = config
-        self._logger = logger
-        self._should_log = tools.Every(config.log_every)
-        batch_steps = config.batch_size * config.batch_length
-        # Determine how often training should occur based on configuration settings.
-        self._should_train = tools.Every(batch_steps / config.train_ratio)
-        self._should_pretrain = tools.Once()
-        # Condition for determining when to reset the environment or simulation.
-        self._should_reset = tools.Every(config.reset_every)
-        # Controls exploration until a certain number of actions have been taken.
-        self._should_expl = tools.Until(int(config.expl_until / config.action_repeat))
-        self._metrics = {}
-        # Normalize the step count based on the action repeat setting in the config.
-        self._step = logger.step // config.action_repeat
-        self._update_count = 0
-        self._dataset = dataset
-        # Initialize the world model with the observation space, action space, current step, and configuration.
-        self._wm = models.WorldModel(self.obs_space, self.act_space, self._step, config)
-        # Initialize the behavior model for task-specific actions using the world model.
-        self._task_behavior = models.ImagBehavior(config, self._wm)
-        if (
-            config.compile and os.name != "nt"
-        ):  # compilation is not supported on windows
-            self._wm = torch.compile(self._wm)
-            self._task_behavior = torch.compile(self._task_behavior)
-        # Define the exploration behavior based on the configuration. This can be greedy, random, or plan2explore.
-        reward = lambda f, s, a: self._wm.heads["reward"](f).mean()
-        # Dynamically select the exploration behavior based on the configuration setting.
-        self._expl_behavior = dict(
-            greedy=lambda: self._task_behavior,
-            random=lambda: expl.Random(config, self.act_space),
-            plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
-        )[config.expl_behavior]().to(self._config.device)
-
-    def __call__(self, obs, reset, state=None, training=True):
-        #print('call function called')
-        step = self._step
-        if training:
-            #print('training')
-            steps = (
-                self._config.pretrain
-                if self._should_pretrain()
-                else self._should_train(step)
-            )
-            for _ in range(steps):#500
-                self._train(next(self._dataset)) # iterator on next element of data set
-                self._update_count += 1
-                self._metrics["update_count"] = self._update_count
-            if self._should_log(step):
-                for name, values in self._metrics.items():
-                    self._logger.scalar(name, float(np.mean(values)))
-                    self._metrics[name] = []
-                if self._config.video_pred_log:
-                    openl = self._wm.video_pred(next(self._dataset))
-                    self._logger.video("train_openl", to_np(openl))
-                self._logger.write(fps=True)
-
-        policy_output, state = self._policy(obs, state, training)
-
-        if training:
-            self._step += len(reset)
-            self._logger.step = self._config.action_repeat * self._step
-        return policy_output, state
-
-    def _policy(self, obs, state, training):
-        if state is None:
-            latent = action = None
-        else:
-            latent, action = state
-        obs = self._wm.preprocess(obs)
-        embed = self._wm.encoder(obs)
-        latent, _ = self._wm.dynamics.obs_step(latent, action, embed, obs["is_first"])
-        if self._config.eval_state_mean:
-            latent["stoch"] = latent["mean"]
-        feat = self._wm.dynamics.get_feat(latent)
-        if not training:
-            actor = self._task_behavior.actor(feat)
-            action = actor.mode()
-        elif self._should_expl(self._step):
-            actor = self._expl_behavior.actor(feat)
-            action = actor.sample()
-        else:
-            actor = self._task_behavior.actor(feat)
-            action = actor.sample()
-        logprob = actor.log_prob(action)
-        latent = {k: v.detach() for k, v in latent.items()}
-        action = action.detach()
-        if self._config.actor.dist == "onehot_gumble":
-            action = torch.one_hot(
-                torch.argmax(action, dim=-1), self._config.num_actions
-            )
-        policy_output = {"action": action, "logprob": logprob}
-        state = (latent, action)
-        return policy_output, state
-
-    def _train(self, data):
-        # World Model Training
-        metrics = {}
-        #print("Train world model")
-        post, context, mets = self._wm._train(data)
-        metrics.update(mets)
-        start = post
-        reward = lambda f, s, a: self._wm.heads["reward"](
-            self._wm.dynamics.get_feat(s)
-        ).mode()
-        # Actor Critic Learning
-        #print("Train Actor Critic")
-        metrics.update(self._task_behavior._train(start, reward)[-1])
-        if self._config.expl_behavior != "greedy":
-            mets = self._expl_behavior.train(start, context, data)[-1]
-            metrics.update({"expl_" + key: value for key, value in mets.items()})
-        for name, value in metrics.items():
-            if not name in self._metrics.keys():
-                self._metrics[name] = [value]
-            else:
-                self._metrics[name].append(value)
 
 def count_steps(folder):
     return sum(int(str(n).split("-")[-1][:-4]) - 1 for n in folder.glob("*.npz"))
@@ -286,7 +157,7 @@ def make_env_orbit():
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     #wrap it
-    env = wrappers.OrbitNumpy(env)
+    env = wrappers.OrbitNumpyExcavation(env)
 
 
     return env, env_cfg
@@ -502,7 +373,6 @@ if __name__ == "__main__":
                 parameters = yaml.safe_load(file)
         # Convert the dictionary to a Namespace object
         args_main = dict_to_namespace(parameters)
-        #args_main = Namespace(act='SiLU', action_repeat=2, actor={'layers': 2, 'dist': 'normal', 'entropy': 0.0003, 'unimix_ratio': 0.01, 'std': 'learned', 'min_std': 0.1, 'max_std': 1.0, 'temp': 0.1, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 1.0}, batch_length=64, batch_size=16, compile=True, cont_head={'layers': 2, 'loss_scale': 1.0, 'outscale': 1.0}, critic={'layers': 2, 'dist': 'symlog_disc', 'slow_target': True, 'slow_target_update': 1, 'slow_target_fraction': 0.02, 'lr': 3e-05, 'eps': 1e-05, 'grad_clip': 100.0, 'outscale': 0.0}, dataset_size=1000000, debug=False, decoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'cnn_sigmoid': False, 'image_dist': 'mse', 'vector_dist': 'symlog_mse', 'outscale': 1.0}, deterministic_run=False, device='cuda:0', disag_action_cond=False, disag_layers=4, disag_log=True, disag_models=10, disag_offset=1, disag_target='stoch', disag_units=400, discount=0.997, discount_lambda=0.95, dyn_deter=512, dyn_discrete=32, dyn_hidden=512, dyn_mean_act='none', dyn_min_std=0.1, dyn_rec_depth=1, dyn_scale=0.5, dyn_std_act='sigmoid2', dyn_stoch=32, encoder={'mlp_keys': '.*', 'cnn_keys': '$^', 'act': 'SiLU', 'norm': True, 'cnn_depth': 32, 'kernel_size': 4, 'minres': 4, 'mlp_layers': 5, 'mlp_units': 1024, 'symlog_inputs': True}, eval_episode_num=10, eval_every=10000.0, eval_state_mean=False, evaldir=None, expl_behavior='greedy', expl_extr_scale=0.0, expl_intr_scale=1.0, expl_until=0, grad_clip=1000, grad_heads=('decoder', 'reward', 'cont'), grayscale=False, imag_gradient='dynamics', imag_gradient_mix=0.0, imag_horizon=15, initial='learned', kl_free=1.0, log_every=10000.0, logdir='./logdir/dmc_walker_walk', model_lr=0.0001, norm=True, offline_evaldir='', offline_traindir='', opt='adam', opt_eps=1e-08, parallel=False, precision=32, prefill=2500, pretrain=100, rep_scale=0.1, reset_every=0, reward_EMA=True, reward_head={'layers': 2, 'dist': 'symlog_disc', 'loss_scale': 1.0, 'outscale': 0.0}, seed=0, size=(64, 64), steps=500000.0, task='dmc_walker_walk', time_limit=1000, train_ratio=512, traindir=None, unimix_ratio=0.01, units=512, video_pred_log=False, weight_decay=0.0)
 
         main(args_main)
     except Exception as err:

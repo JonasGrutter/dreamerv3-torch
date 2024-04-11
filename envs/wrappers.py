@@ -107,9 +107,6 @@ class OrbitNumpy(gym.Wrapper):
             id = f"{timestamp}-{str(uuid.uuid4().hex)}"
             self.unique_indices.append(id)
 
-        
-
-
     def step(self, action):
         
         # Transform Action to torch tensor and put it on the right device
@@ -169,6 +166,65 @@ class OrbitNumpy(gym.Wrapper):
         '''
         reset_env_ids = self.env.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0:
+            self.env._reset_idx(reset_env_ids)
+
+        self.env.command_manager.compute(dt=self.step_dt)
+
+        self.env.obs_buf = self.env.observation_manager.compute()
+
+        return obs_dreamer
+
+
+class OrbitNumpyExcavation(OrbitNumpy):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def step(self, action):
+        
+        # Transform Action to torch tensor and put it on the right device
+        action_torch = action['action'].clone().detach().to(self.env.unwrapped.device)
+        assert action_torch.shape[0] == self.num_envs
+        # Orbit Env Stepping
+        obs_dict, rew, terminated, truncated, extras = self.env.step(action_torch)
+        # rew: torch tensor, terminated: torch tensor, extras['log']: float but extras 
+        
+        # compute dones 
+        dones = (terminated | truncated)
+        # move extra observations to the extras dict
+
+        extras["observations"] = obs_dict # TODO: Why ?
+        # move time out information to the extras dict
+        # this is only needed for infinite horizon tasks
+        if not self.unwrapped.cfg.is_finite_horizon:
+            extras["time_outs"] = to_np(truncated)
+        # Convert to numpy
+        # Concvert obs to the dreamer format
+        obs_np = [
+            {obs_key: obs_dict[obs_key][env_idx].cpu().numpy() for obs_key in obs_dict} # only key is policy anyway
+            for env_idx in range(self.env.unwrapped.num_envs)
+        ]
+
+        rew_np =  to_np(rew)
+        done_np = to_np(dones)
+        extras_np = {}
+        extras_np['episode_neg_term_counts'] = {}
+        extras_np['episode_pos_term_counts'] = {}
+
+        for key in extras['episode_neg_term_counts']:
+            extras_np['episode_neg_term_counts'][key] = to_np(extras['episode_neg_term_counts'][key])
+
+        for key in extras['episode_pos_term_counts']:
+            extras_np['episode_neg_term_counts'][key] = to_np(extras['episode_pos_term_counts'][key])
+
+
+        return obs_np, rew_np, done_np, extras_np
+    
+    def reset_idx(self, indices):
+        '''
+            Reset env for given indices and return obs in dreamer format
+        '''
+        reset_env_ids = self.env.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(reset_env_ids) > 0:
             self.env.unwrapped.reset_idx(reset_env_ids)
 
         # Update derived measurements for resetted envs
@@ -196,6 +252,10 @@ class OrbitNumpy(gym.Wrapper):
                 obs_dreamer[ids]['is_terminal'] = False
 
         return obs_dreamer
+
+
+
+
 
 class OneHotAction(gym.Wrapper):
     def __init__(self, env):
