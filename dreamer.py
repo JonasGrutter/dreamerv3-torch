@@ -315,7 +315,7 @@ def main(config):
         config,
         logger,
         train_dataset,
-        writer=None
+        writer=wandb_logger
     ).to(config.device)
     # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)
@@ -346,12 +346,12 @@ def main(config):
             steps=config.eval_every,
             state=state,
         )
-        # Enhance Data Set
+        # Save model
         items_to_save = {
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
         }
-        torch.save(os.path.join(logdir, f"model_{agent._step}.pt"))
+        torch.save(items_to_save, os.path.join(logdir, f"model_{agent._step}.pt"))
     
     train_envs.close()
 
