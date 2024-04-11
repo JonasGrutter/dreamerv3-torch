@@ -51,7 +51,6 @@ args_cli = parser.parse_args()
 args_cli.headless = False
 args_cli.num_envs = 2
 args_cli.task= 'Isaac-m545-v0'
-EXCAVATION = False
 
 LOGGER_TYPE = "Tensorboard" # "Wandb"
 
@@ -167,12 +166,8 @@ if __name__ == "__main__":
             return Namespace(**d)
 
         # Load the YAML file
-        if EXCAVATION:
-            with open('configs.yaml', 'r') as file:
-                parameters = yaml.safe_load(file)
-        else:
-            with open('configs_dmc_proprio.yaml', 'r') as file:
-                parameters = yaml.safe_load(file)
+        with open('configs.yaml', 'r') as file:
+            parameters = yaml.safe_load(file)
         # Convert the dictionary to a Namespace object
         args_main = dict_to_namespace(parameters)
         main(args_main)

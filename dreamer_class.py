@@ -9,7 +9,7 @@ import tools
 import envs.wrappers as wrappers
 from parallel import Parallel, Damy
 from gym.spaces import Box
-
+import statistics
 import torch
 from torch import nn
 from torch import distributions as torchd
@@ -20,7 +20,7 @@ to_np = lambda x: x.detach().cpu().numpy()
 
 # Dreamer class implements the Dreamer agent model, integrating a world model and behavior models for decision making.
 class Dreamer(nn.Module):
-    def __init__(self, envs, config, logger, dataset):
+    def __init__(self, envs, config, logger, dataset, writer = None):
         super(Dreamer, self).__init__()
         # Environment storing       
         self.envs = envs
@@ -65,18 +65,23 @@ class Dreamer(nn.Module):
             plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
         )[config.expl_behavior]().to(self._config.device)
 
+        #runner
+        self.num_steps_per_env = 1
+        self.tot_timesteps = 0
+        self.tot_times = 0
+        self.writer =None
+
     def __call__(self, obs, reset, state=None, training=True):
         #print('call function called')
         step = self._step
         if training:
-            #print('training')
             steps = (
                 self._config.pretrain
                 if self._should_pretrain()
                 else self._should_train(step)
             )
-            for _ in range(steps):#500
-                self._train(next(self._dataset)) # iterator on next element of data set
+            for _ in range(steps):
+                self._train(next(self._dataset))
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
             if self._should_log(step):
@@ -95,6 +100,7 @@ class Dreamer(nn.Module):
             self._logger.step = self._config.action_repeat * self._step
         return policy_output, state
 
+        
     def _policy(self, obs, state, training):
         if state is None:
             latent = action = None
@@ -147,3 +153,90 @@ class Dreamer(nn.Module):
                 self._metrics[name] = [value]
             else:
                 self._metrics[name].append(value)
+
+
+    def log(self, locs: dict, width: int = 80, pad: int = 35):
+        self.tot_timesteps += self.num_steps_per_env * self.envs.num_envs
+        self.tot_time += locs["collection_time"] + locs["learn_time"]
+        iteration_time = locs["collection_time"] + locs["learn_time"]
+
+        # Loggs Episode information, including rewards and lengths,
+        ep_string = ""
+        if locs["ep_infos"]:
+            for key in locs["ep_infos"][0]:
+                infotensor = torch.tensor([], device=self.device)
+                for ep_info in locs["ep_infos"]:
+                    # handle scalar and zero dimensional tensor infos
+                    if key not in ep_info:
+                        continue
+                    if not isinstance(ep_info[key], torch.Tensor):
+                        ep_info[key] = torch.Tensor([ep_info[key]])
+                    if len(ep_info[key].shape) == 0:
+                        ep_info[key] = ep_info[key].unsqueeze(0)
+                    infotensor = torch.cat((infotensor, ep_info[key].to(self.device)))
+                value = torch.mean(infotensor)
+                # log to logger and terminal
+                if "/" in key:
+                    self.writer.add_scalar(key, value, locs["it"])
+                    ep_string += f"""{f'{key}:':>{pad}} {value:.4f}\n"""
+                else:
+                    self.writer.add_scalar("Episode/" + key, value, locs["it"])
+                    ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
+        mean_std = self.alg.actor_critic.std.mean()
+        fps = int(self.num_steps_per_env * self.envs.num_envs / (locs["collection_time"] + locs["learn_time"]))
+
+        self.writer.add_scalar("Loss/value_function", locs["mean_value_loss"], locs["it"])
+        self.writer.add_scalar("Loss/surrogate", locs["mean_surrogate_loss"], locs["it"])
+        self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
+        self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
+        self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
+        self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
+        self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
+        if len(locs["rewbuffer"]) > 0:
+            self.writer.add_scalar("Train/mean_reward", statistics.mean(locs["rewbuffer"]), locs["it"])
+            self.writer.add_scalar("Train/mean_episode_length", statistics.mean(locs["lenbuffer"]), locs["it"])
+            if self.logger_type != "wandb":  # wandb does not support non-integer x-axis logging
+                self.writer.add_scalar("Train/mean_reward/time", statistics.mean(locs["rewbuffer"]), self.tot_time)
+                self.writer.add_scalar(
+                    "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
+                )
+
+        str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
+
+        if len(locs["rewbuffer"]) > 0:
+            log_string = (
+                f"""{'#' * width}\n"""
+                f"""{str.center(width, ' ')}\n\n"""
+                f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
+                            'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
+                f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
+                f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
+            )
+            #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
+            #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
+        else:
+            log_string = (
+                f"""{'#' * width}\n"""
+                f"""{str.center(width, ' ')}\n\n"""
+                f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
+                            'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
+                f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+            )
+            #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
+            #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
+
+        log_string += ep_string
+        log_string += (
+            f"""{'-' * width}\n"""
+            f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
+            f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
+            f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
+            f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
+                               locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
+        )
+        print(log_string)

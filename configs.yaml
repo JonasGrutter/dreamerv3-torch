@@ -13,7 +13,7 @@ reset_every: 0
 device: 'cuda:0'
 compile: True
 precision: 32
-debug: False
+debug: Faperlse
 video_pred_log: False
 
 # Environment

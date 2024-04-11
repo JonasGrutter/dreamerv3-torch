@@ -212,9 +212,10 @@ def main(config):
     logger = tools.Logger(logdir, config.action_repeat * step)
 
 
-
-    #wandb_logger = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=config)
-    #wandb_logger.log_config(train_envs_cfg, config, None, None)
+    dict_config = vars(config)
+    dict_config['wandb_project'] = 'Dreamer_m545'
+    wandb_logger = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=vars(config))
+    wandb_logger.log_config(train_envs_cfg, dict_config, None, None)
 
     # Reset
     train_envs.reset()
@@ -314,6 +315,7 @@ def main(config):
         config,
         logger,
         train_dataset,
+        writer=None
     ).to(config.device)
     # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)
@@ -349,7 +351,9 @@ def main(config):
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
         }
-        torch.save(items_to_save, logdir / "latest.pt")
+        torch.save(os.path.join(logdir, f"model_{agent._step}.pt"))
+    
+    train_envs.close()
 
 
 if __name__ == "__main__":
