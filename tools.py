@@ -258,7 +258,7 @@ def simulate(
         for i in range(len(obs_dreamer)): #NOTE: Can be put in next loop if stuff in the middle useless
             # Add the 'is_terminal' key with the value of the done flag
             if EXCAVATION:
-                obs_dreamer[i]['is_terminal'] = done_np
+                obs_dreamer[i]['is_terminal'] = done_np[i]
             else:
                 obs_dreamer[i]['is_terminal'] = False #for EXCAVATIOn, False otherwise, done_np[i]
             obs_dreamer[i]['is_first'] = False

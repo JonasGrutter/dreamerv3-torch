@@ -53,7 +53,7 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 100
+args_cli.num_envs = 2
 args_cli.task= 'Isaac-m545-v0'
 
 LOGGER_TYPE = "Tensorboard" # "Wandb"
@@ -253,8 +253,8 @@ def main(config):
             else:
                 random_actor = torchd.independent.Independent(
                     torchd.uniform.Uniform(
-                        torch.Tensor(acts.low).repeat(config.envs, 1),
-                        torch.Tensor(acts.high).repeat(config.envs, 1),
+                        torch.Tensor(acts.low).repeat(train_envs.num_envs, 1),
+                        torch.Tensor(acts.high).repeat(train_envs.num_envs, 1),
                     ),
                     1,
                 )
