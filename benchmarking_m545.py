@@ -271,7 +271,8 @@ def make_env_orbit():
 
 
     # Override env cfg
-    env_cfg.reset.only_above_soil = False
+    env_cfg.reset.only_above_soil = True
+    env_cfg.disable_negative_termination = True
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -309,7 +310,7 @@ def main(config):
         logger,
         None,
     ).to(config.device)
-    num_steps = 100
+    num_steps = 500
     benchmark_policy(agent, envs, logdir, num_steps=num_steps)
     envs.close()
 

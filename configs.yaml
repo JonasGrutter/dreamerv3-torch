@@ -1,11 +1,10 @@
-logdir: './logdir/dmc_walker_walk'
+logdir: './logdir/m545'
 traindir: null
 evaldir: null
 offline_traindir: ''
 offline_evaldir: ''
 seed: 0
 deterministic_run: False
-steps: !!float 5e5
 parallel: False
 eval_episode_num: 0
 log_every: !!float 1e4
@@ -16,14 +15,17 @@ precision: 32
 debug: Faperlse
 video_pred_log: False
 
+# Time stepping
+prefill: 3 #10000
+steps: 10 #!!float 5e5
+eval_every: 10 # !!float 1e4
+
 # Environment
-task: 'dmc_walker_walk'
+task: 'm545'
 size: [64, 64]
-action_repeat: 2
+action_repeat: 6
 time_limit: 1000
 grayscale: False
-prefill: 10000
-eval_every: !!float 1e4
 reward_EMA: True
 
 # Model

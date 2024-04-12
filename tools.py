@@ -16,6 +16,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch import distributions as torchd
 from torch.utils.tensorboard import SummaryWriter
+from utils.wandbutils import WandbSummaryWriter
+
 
 
 to_np = lambda x: x.detach().cpu().numpy()
@@ -54,7 +56,33 @@ class TimeRecording:
         torch.cuda.synchronize()
         print(self._comment, self._st.elapsed_time(self._nd) / 1000)
 
+class WandbLogger:
+    def __init__(self, logdir, config, step):
+        dict_config = vars(config)
+        dict_config['wandb_project'] = 'Dreamer_m545'
+        self.writer = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=dict_config)
+        self.step = step
 
+    def scalar(self, name, value, step=None):
+        # Log scalar values
+        self.writer.add_scalar(name, value, global_step=step)
+
+    def image(self, name, value, step=None):
+        # Currently, logging images and videos directly through WandbSummaryWriter isn't supported.
+        # You might want to implement it or log directly using wandb.
+        pass  # Implement if needed, using wandb.log() or through enhancements in WandbSummaryWriter
+
+    def video(self, name, value, fps=30, step=None):
+        # Similar to images, implement this if you need video logging.
+        pass  # Implement if needed
+
+    def write(self, fps=False, step=False):
+        # The flush mechanism is handled internally within WandbSummaryWriter and wandb.
+        pass  # You might not need this method.
+
+    def close(self):
+        # Properly finalize the wandb run
+        self.writer.stop()
 class Logger:
     def __init__(self, logdir, step):
         self._logdir = logdir
@@ -151,7 +179,7 @@ def simulate(
         step, episode, done, length, obs_dreamer, agent_state, reward = state
 
     # Main simulation loop.
-    while (steps and step < steps)or (episodes and episode < episodes):
+    while (steps and step < steps) or (episodes and episode < episodes):
         # Reset environments that are done.
         if done.any():
             #indices = [index for index, d in enumerate(done) if d]  # Find indices of environments to reset.

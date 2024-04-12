@@ -53,7 +53,7 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 100
+args_cli.num_envs = 2
 args_cli.task= 'Isaac-m545-v0'
 EXCAVATION = True
 
@@ -209,14 +209,17 @@ def main(config):
     else:
         train_envs = make_envs_dmc(config)
         acts = train_envs.envs[0].action_space
+    
+    
     logger = tools.Logger(logdir, config.action_repeat * step)
 
 
-    dict_config = vars(config)
-    dict_config['wandb_project'] = 'Dreamer_m545'
-    wandb_logger = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=vars(config))
-    wandb_logger.log_config(train_envs_cfg, dict_config, None, None)
-
+    #dict_config = vars(config)
+    #dict_config['wandb_project'] = 'Dreamer_m545'
+    #wandb_logger = WandbSummaryWriter(log_dir=logdir, flush_secs=10,cfg=vars(config))
+    #wandb_logger.log_config(train_envs_cfg, dict_config, None, None)
+    #logger = tools.WandbLogger(logdir, config, config.action_repeat * step)
+    
     # Reset
     train_envs.reset()
     # -- Orbit
@@ -307,15 +310,12 @@ def main(config):
     # Create training and evaluation datasets from loaded episodes.
     train_dataset = make_dataset(train_eps, config)
 
-    train_eps
-
     # Initialize the Dreamer agent with the specified configurations and datasets.
     agent = Dreamer(
         train_envs,
         config,
         logger,
-        train_dataset,
-        writer=wandb_logger
+        train_dataset
     ).to(config.device)
     # Disable gradients for the entire agent model to freeze its parameters during certain operations.
     agent.requires_grad_(requires_grad=False)

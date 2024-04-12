@@ -73,7 +73,7 @@ class Dreamer(nn.Module):
 
     def __call__(self, obs, reset, state=None, training=True):
         #print('call function called')
-        step = self._step
+        step = step
         if training:
             steps = (
                 self._config.pretrain
