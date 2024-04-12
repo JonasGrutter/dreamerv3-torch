@@ -52,7 +52,6 @@ args_cli = parser.parse_args()
 args_cli.headless = True
 args_cli.num_envs = 4096
 args_cli.task= 'Isaac-m545-v0'
-EXCAVATION = False
 
 LOGGER_TYPE = "Tensorboard" # "Wandb"
 

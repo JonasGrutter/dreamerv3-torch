@@ -34,7 +34,7 @@ import carb
 from utils.wandbutils import WandbSummaryWriter
 
 
-from dreamer_class import Dreamer
+from dreamer_class import Dreamer, EXCAVATION
 
 # local imports
 import cli_args  # i
@@ -53,9 +53,8 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-args_cli.num_envs = 2
+args_cli.num_envs = 100
 args_cli.task= 'Isaac-m545-v0'
-EXCAVATION = True
 
 LOGGER_TYPE = "Tensorboard" # "Wandb"
 

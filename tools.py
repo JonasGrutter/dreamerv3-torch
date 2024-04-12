@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from torch import distributions as torchd
 from torch.utils.tensorboard import SummaryWriter
 from utils.wandbutils import WandbSummaryWriter
+from dreamer_class import EXCAVATION
 
 
 
@@ -224,7 +225,6 @@ def simulate(
                 transition = {k: convert(v) for k, v in transition.items()}
                 transition['reward'] = 0.0
                 transition["discount"] = 1.0
-                # t["discount"] = 1.0 Put it or not ?
                 # Cache the transition
                 add_to_cache(cache, envs.unique_indices[ids], transition)
 
@@ -257,7 +257,10 @@ def simulate(
         # Iterate over each observation and the corresponding done flag
         for i in range(len(obs_dreamer)): #NOTE: Can be put in next loop if stuff in the middle useless
             # Add the 'is_terminal' key with the value of the done flag
-            obs_dreamer[i]['is_terminal'] = done_np[i] #for EXCAVATIOn, False otherwise
+            if EXCAVATION:
+                obs_dreamer[i]['is_terminal'] = done_np
+            else:
+                obs_dreamer[i]['is_terminal'] = False #for EXCAVATIOn, False otherwise, done_np[i]
             obs_dreamer[i]['is_first'] = False
         
         # bit sketchy but works: look if discount is a key, if not: excavation

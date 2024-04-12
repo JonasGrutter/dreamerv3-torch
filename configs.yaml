@@ -16,14 +16,14 @@ debug: Faperlse
 video_pred_log: False
 
 # Time stepping
-prefill: 3 #10000
-steps: 10 #!!float 5e5
-eval_every: 10 # !!float 1e4
+prefill: 10000
+steps: !!float 5e5
+eval_every: !!float 1e4
 
 # Environment
 task: 'm545'
 size: [64, 64]
-action_repeat: 6
+action_repeat: 2
 time_limit: 1000
 grayscale: False
 reward_EMA: True
