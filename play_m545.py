@@ -52,8 +52,6 @@ args_cli.headless = False
 args_cli.num_envs = 2
 args_cli.task= 'Isaac-m545-v0'
 
-LOGGER_TYPE = "Tensorboard" # "Wandb"
-
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app

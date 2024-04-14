@@ -53,8 +53,6 @@ args_cli.headless = True
 args_cli.num_envs = 4096
 args_cli.task= 'Isaac-m545-v0'
 
-LOGGER_TYPE = "Tensorboard" # "Wandb"
-
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -87,7 +85,7 @@ def load_agent(agent, path):
 def benchmark_policy(agent, env, logdir, num_steps):
     # Load the Policy
     if (logdir / "latest.pt").exists():
-        checkpoint = torch.load(logdir / "latest.pt")
+        checkpoint = torch.load(logdir / "model_255000.pt")
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
         # Ensure the agent does not pretrain again if it has already completed pretraining.
@@ -327,13 +325,9 @@ if __name__ == "__main__":
             return Namespace(**d)
 
         # Load the YAML file
-        if EXCAVATION:
-            with open('configs.yaml', 'r') as file:
-                parameters = yaml.safe_load(file)
-        else:
-            with open('configs_dmc_proprio.yaml', 'r') as file:
-                parameters = yaml.safe_load(file)
-        # Convert the dictionary to a Namespace object
+
+        with open('configs.yaml', 'r') as file:
+            parameters = yaml.safe_load(file)
         args_main = dict_to_namespace(parameters)
         main(args_main)
     except Exception as err:

@@ -67,6 +67,7 @@ class WandbLogger:
     def scalar(self, name, value, step=None):
         # Log scalar values
         self.writer.add_scalar(name, value, global_step=step)
+        print("Name: ", name, " Value: ", value)
 
     def image(self, name, value, step=None):
         # Currently, logging images and videos directly through WandbSummaryWriter isn't supported.
@@ -97,6 +98,7 @@ class Logger:
 
     def scalar(self, name, value):
         self._scalars[name] = float(value)
+        
 
     def image(self, name, value):
         self._images[name] = np.array(value)
