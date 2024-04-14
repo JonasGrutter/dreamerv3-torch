@@ -84,6 +84,9 @@ def play_policy(agent, env, logdir):
     done = np.full(env.num_envs, True)
     obs['is_first'] = np.full(env.num_envs, True)
     obs['is_terminal'] = np.full(env.num_envs, False)
+
+    encoder = agent._wm.encoder
+
     while True:
         with torch.no_grad():
             action, _ = agent(obs, done, training=False)

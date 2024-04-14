@@ -92,8 +92,6 @@ from rsl_rl.runners import OnPolicyRunner
 
 
 #----- ORBIT-End
-
-
 def count_steps(folder):
     return sum(int(str(n).split("-")[-1][:-4]) - 1 for n in folder.glob("*.npz"))
 

@@ -265,12 +265,10 @@ def simulate(
             obs_dreamer[i]['is_first'] = False
         
         # bit sketchy but works: look if discount is a key, if not: excavation
-        excavation = True
-        if "discount" in extras:
-            excavation = False
+
 
         #log all additional info
-        if excavation:
+        if EXCAVATION:
             # Log all Episode Reward and Episode Termination
             for key in extras['log']:
                 logger.scalar("Dataset/ " + key, extras['log'][key])
@@ -301,7 +299,7 @@ def simulate(
             transition["action"] =  to_np(action['action'])[i]
             transition["logprob"] = to_np(action['logprob'])[i]
             transition["reward"] = r
-            if excavation:
+            if EXCAVATION:
                 transition["discount"] = 1.0
             else:
                 transition["discount"] = extras[i].get("discount", np.array(1 - float(d)))

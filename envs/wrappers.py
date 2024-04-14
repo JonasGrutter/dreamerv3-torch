@@ -227,8 +227,8 @@ class OrbitNumpyExcavation(OrbitNumpy):
         total_sum = sum(neg_term_sums.values())+sum(pos_term_sums.values())
 
         # Step 3: Normalize each sum
-        normalized_neg_term_sums = {key: value / total_sum for key, value in neg_term_sums.items()}
-        normalized_pos_term_sums = {key: value / total_sum for key, value in pos_term_sums.items()}
+        normalized_neg_term_sums = {key: value / total_sum if total_sum != 0 else 0 for key, value in neg_term_sums.items()}
+        normalized_pos_term_sums = {key: value / total_sum if total_sum != 0 else 0 for key, value in pos_term_sums.items()}
         extras_np['normalized_neg_term_sums'] = normalized_neg_term_sums
         extras_np['normalized_pos_term_sums'] = normalized_pos_term_sums
 

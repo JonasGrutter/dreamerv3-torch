@@ -289,6 +289,43 @@ class RSSM(nn.Module):
 
         return loss, value, dyn_loss, rep_loss
 
+class Identity_encoder(nn.Module):
+    def __init__(
+        self,
+        shapes,
+        mlp_keys,
+        cnn_keys,
+        act,
+        norm,
+        cnn_depth,
+        kernel_size,
+        minres,
+        mlp_layers,
+        mlp_units,
+        symlog_inputs,
+    ):
+        self.mlp_shapes = {
+            k: v
+            for k, v in shapes.items()
+            if len(v) in (1, 2) and re.match(mlp_keys, k)
+        }
+        self.output_dim = self.mlp_shapes['policy'][0] # 41
+        
+    def forward(self, obs):
+        inputs = torch.cat([obs[k] for k in self.mlp_shapes], -1)
+        # Identity
+        return inputs
+    
+class Identity_decoder(nn.Module):
+    def __init__(self):
+        super(Identity_decoder, self).__init__()
+
+    def forward(self, features):
+        from torch.distributions import Normal
+        # Assume features is the data you want to perfectly reconstruct
+        mean = features  # or any transformation that perfectly reverses the encoder
+        std = torch.zeros_like(features)  # Zero variance for deterministic output
+        return {'output_key': Normal(mean, std)}
 
 class MultiEncoder(nn.Module):
     def __init__(

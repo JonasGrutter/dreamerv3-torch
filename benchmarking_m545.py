@@ -85,7 +85,7 @@ def load_agent(agent, path):
 def benchmark_policy(agent, env, logdir, num_steps):
     # Load the Policy
     if (logdir / "latest.pt").exists():
-        checkpoint = torch.load(logdir / "model_255000.pt")
+        checkpoint = torch.load(logdir / "latest.pt")
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
         # Ensure the agent does not pretrain again if it has already completed pretraining.
