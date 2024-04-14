@@ -207,15 +207,30 @@ class OrbitNumpyExcavation(OrbitNumpy):
         rew_np =  to_np(rew)
         done_np = to_np(dones)
         extras_np = {}
+        extras_np['log'] = extras['log']
+        
+        '''
         extras_np['episode_neg_term_counts'] = {}
         extras_np['episode_pos_term_counts'] = {}
-
         for key in extras['episode_neg_term_counts']:
             extras_np['episode_neg_term_counts'][key] = to_np(extras['episode_neg_term_counts'][key])
 
         for key in extras['episode_pos_term_counts']:
             extras_np['episode_neg_term_counts'][key] = to_np(extras['episode_pos_term_counts'][key])
+        '''
 
+        # Normalized sum of number of termination conditions reached
+        # Step 1: Calculate sum for each tensor
+        neg_term_sums = {key: tensor.sum().item() for key, tensor in extras['episode_neg_term_counts'].items()}
+        pos_term_sums = {key: tensor.sum().item() for key, tensor in extras['episode_pos_term_counts'].items()}
+        # Step 2: Calculate total sum across all tensors
+        total_sum = sum(neg_term_sums.values())+sum(pos_term_sums.values())
+
+        # Step 3: Normalize each sum
+        normalized_neg_term_sums = {key: value / total_sum for key, value in neg_term_sums.items()}
+        normalized_pos_term_sums = {key: value / total_sum for key, value in pos_term_sums.items()}
+        extras_np['normalized_neg_term_sums'] = normalized_neg_term_sums
+        extras_np['normalized_pos_term_sums'] = normalized_pos_term_sums
 
         return obs_np, rew_np, done_np, extras_np
     

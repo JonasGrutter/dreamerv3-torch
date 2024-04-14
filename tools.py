@@ -269,6 +269,17 @@ def simulate(
         if "discount" in extras:
             excavation = False
 
+        #log all additional info
+        if excavation:
+            # Log all Episode Reward and Episode Termination
+            for key in extras['log']:
+                logger.scalar("Dataset/ " + key, extras['log'][key])
+            # Log % of termnation condition reached
+            for key in extras['normalized_neg_term_sums']:
+                logger.scalar("Dataset/ Normalized sum/ "+ key, extras['normalized_neg_term_sums'][key])
+            for key in extras['normalized_pos_term_sums']:
+                logger.scalar("Dataset/ Normalized sum/ " + key, extras['normalized_pos_term_sums'][key])
+
         # Log
         obs = list(obs_dreamer)
         reward = list(rew_np)
@@ -316,10 +327,10 @@ def simulate(
 
                 if not is_eval:
                     step_in_dataset = erase_over_episodes(cache, limit)
-                    logger.scalar(f"dataset_size", step_in_dataset)
-                    logger.scalar(f"train_return", score)
-                    logger.scalar(f"train_length", length)
-                    logger.scalar(f"train_episodes", len(cache))
+                    logger.scalar(f"Dataset/ dataset_size", step_in_dataset)
+                    logger.scalar(f"Dataset/ train_return", score)
+                    logger.scalar(f"Dataset/ train_length", length)
+                    logger.scalar(f"Dataset/ train_episodes", len(cache))
                     logger.write(step=logger.step)
 
                     
