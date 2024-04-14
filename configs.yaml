@@ -1,4 +1,4 @@
-logdir: './logdir/m545'
+logdir: './logdir/m545_test'
 traindir: null
 evaldir: null
 offline_traindir: ''
@@ -21,7 +21,7 @@ steps: !!float 5e5
 eval_every: !!float 1e4
 
 # Environment
-task: 'm545'
+task: 'm545_test'
 size: [64, 64]
 action_repeat: 2
 time_limit: 1000

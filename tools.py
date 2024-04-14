@@ -67,7 +67,6 @@ class WandbLogger:
     def scalar(self, name, value, step=None):
         # Log scalar values
         self.writer.add_scalar(name, value, global_step=step)
-        print("Name: ", name, " Value: ", value)
 
     def image(self, name, value, step=None):
         # Currently, logging images and videos directly through WandbSummaryWriter isn't supported.
@@ -273,7 +272,6 @@ def simulate(
         # Log
         obs = list(obs_dreamer)
         reward = list(rew_np)
-        reward = list(extras)
         done = np.stack(done_np)
         episode += int(done.sum())
         length += 1
@@ -323,6 +321,9 @@ def simulate(
                     logger.scalar(f"train_length", length)
                     logger.scalar(f"train_episodes", len(cache))
                     logger.write(step=logger.step)
+
+                    
+                    
 
 
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward) # All of these are numpy 
